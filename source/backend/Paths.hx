@@ -7,6 +7,8 @@ import flixel.math.FlxRect;
 
 import openfl.display.BitmapData;
 import openfl.display3D.textures.RectangleTexture;
+import openfl.display3D.Context3D;
+import openfl.display3D.Context3DTextureFormat;
 import openfl.utils.AssetType;
 import openfl.utils.Assets as OpenFlAssets;
 import openfl.system.System;
@@ -226,6 +228,20 @@ class Paths
 		var file:String = null;
 
 		#if MODS_ALLOWED
+		// Try ASTC first (compressed texture format for mobile)
+		var astcFile:String = modsImagesASTC(key);
+		if (currentTrackedAssets.exists(astcFile))
+		{
+			localTrackedAssets.push(astcFile);
+			return currentTrackedAssets.get(astcFile);
+		}
+		else if (FileSystem.exists(astcFile))
+		{
+			var astcGraphic = ASTCTextureHandler.loadTexture(astcFile);
+			if (astcGraphic != null) return astcGraphic;
+		}
+
+		// Fall back to PNG
 		file = modsImages(key);
 		if (currentTrackedAssets.exists(file))
 		{
@@ -256,6 +272,7 @@ class Paths
 		trace('oh no its returning null NOOOO ($file)');
 		return null;
 	}
+
 
 	static public function cacheBitmap(file:String, ?bitmap:BitmapData = null, ?allowGPU:Bool = true)
 	{
@@ -504,6 +521,10 @@ class Paths
 
 	inline static public function modsImages(key:String) {
 		return modFolders('images/' + key + '.png');
+	}
+
+	inline static public function modsImagesASTC(key:String) {
+		return modFolders('images/' + key + '.astc');
 	}
 
 	inline static public function modsXml(key:String) {
