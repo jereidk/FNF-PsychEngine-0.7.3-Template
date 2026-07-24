@@ -1533,18 +1533,22 @@ class FunkinLua {
 
 			var resultStr:String = Lua.tostring(lua, result);
 			if(resultStr != null && result != 0) {
-				trace(resultStr);
+				// Format the error message with more context
+				var errorMsg:String = formatLoadError(resultStr, result, scriptName, isString);
+				trace(errorMsg);
 				#if (windows || mobile || js || wasm)
-				CoolUtil.showPopUp(resultStr, 'Error on lua script!');
+				CoolUtil.showPopUp(errorMsg, 'Error on lua script!');
 				#else
-				luaTrace('$scriptName\n$resultStr', true, false, FlxColor.RED);
+				luaTrace(errorMsg, true, false, FlxColor.RED);
 				#end
 				lua = null;
 				return;
 			}
 			if(isString) scriptName = 'unknown';
 		} catch(e:Dynamic) {
-			trace(e);
+			var errorMsg:String = '[Load Error] $scriptName: ${e}';
+			trace(errorMsg);
+			luaTrace(errorMsg, true, false, FlxColor.RED);
 			return;
 		}
 		trace('lua file loaded succesfully:' + scriptName);
@@ -1567,8 +1571,10 @@ class FunkinLua {
 			var type:Int = Lua.type(lua, -1);
 
 			if (type != Lua.LUA_TFUNCTION) {
-				if (type > Lua.LUA_TNIL)
-					luaTrace("ERROR (" + func + "): attempt to call a " + LuaUtils.typeToString(type) + " value", false, false, FlxColor.RED);
+				if (type > Lua.LUA_TNIL) {
+					var typeName:String = LuaUtils.typeToString(type);
+					luaTrace("[Runtime Error] $scriptName in $func(): attempt to call a $typeName value", false, false, FlxColor.RED);
+				}
 
 				Lua.pop(lua, 1);
 				return LuaUtils.Function_Continue;
@@ -1579,8 +1585,8 @@ class FunkinLua {
 
 			// Checks if it's not successful, then show a error.
 			if (status != Lua.LUA_OK) {
-				var error:String = getErrorMessage(status);
-				luaTrace("ERROR (" + func + "): " + error, false, false, FlxColor.RED);
+				var error:String = getErrorMessage(status, func, scriptName);
+				luaTrace(error, false, false, FlxColor.RED);
 				return LuaUtils.Function_Continue;
 			}
 
@@ -1686,22 +1692,87 @@ class FunkinLua {
 		return null;
 	}
 
-	public function getErrorMessage(status:Int):String {
+	private function formatLoadError(errorStr:String, errorCode:Dynamic, fileName:String, isString:Bool):String {
+		if (errorStr == null) errorStr = '';
+
+		var errorType:String = '[Load Error]';
+		if (errorCode != null) {
+			switch(Std.int(errorCode)) {
+				case Lua.LUA_ERRSYNTAX: errorType = '[Syntax Error]';
+				case Lua.LUA_ERRMEM: errorType = '[Memory Error]';
+			}
+		}
+
+		// Extract line info if present
+		var lineInfo:String = '';
+		var cleanMsg:String = errorStr;
+
+		var lineMatch = ~/[^:]+:(\d+):(.+)/s;
+		if (lineMatch.match(errorStr)) {
+			cleanMsg = lineMatch.matched(2);
+			lineInfo = ':${lineMatch.matched(1)}';
+		}
+
+		return '$errorType $fileName$lineInfo: $cleanMsg';
+	}
+
+	public function getErrorMessage(status:Int, ?funcName:String = '', ?scrName:String = ''):String {
 		var v:String = Lua.tostring(lua, -1);
 		Lua.pop(lua, 1);
 
-		if (v != null) v = v.trim();
-		if (v == null || v == "") {
-			switch(status) {
-				case Lua.LUA_ERRRUN: return "Runtime Error";
-				case Lua.LUA_ERRMEM: return "Memory Allocation Error";
-				case Lua.LUA_ERRERR: return "Critical Error";
-			}
-			return "Unknown Error";
+		var errorType:String = switch(status) {
+			case Lua.LUA_ERRSYNTAX: "Syntax Error";
+			case Lua.LUA_ERRRUN: "Runtime Error";
+			case Lua.LUA_ERRMEM: "Memory Error";
+			case Lua.LUA_ERRERR: "Callback Error";
+			default: "Error";
+		};
+
+		// Get LuaJIT stack trace if available
+		var stackTrace:String = getLuaStackTrace();
+
+		if (v == null || v.trim() == "") {
+			var base:String = '[$errorType] ${funcName != "" ? funcName : scriptName}';
+			if (stackTrace != '') base += '\n' + stackTrace;
+			return base;
 		}
 
-		return v;
-		return null;
+		// Clean message and extract line info
+		var lineInfo:String = '';
+		var cleanMessage:String = v;
+
+		// Try to extract line info from LuaJIT error format: "filename:line: message"
+		var lineMatch = ~/[^:]+:(\d+):(.+)/s;
+		if (lineMatch.match(v)) {
+			cleanMessage = lineMatch.matched(2);
+			lineInfo = ':${lineMatch.matched(1)}';
+		} else {
+			var altMatch = ~/line\s*(\d+)/i;
+			if (altMatch.match(v)) {
+				lineInfo = ':${altMatch.matched(1)}';
+			}
+		}
+
+		var context:String = funcName != '' ? ' in ${funcName}()' : '';
+		var base:String = '[$errorType] ${scriptName}${lineInfo}$context: $cleanMessage';
+
+		// Add stack trace if it has useful info (more than just the current line)
+		if (stackTrace != '' && !stackTrace.contains(scriptName.split('/').pop() + lineInfo)) {
+			base += '\n' + stackTrace;
+		}
+
+		return base;
+	}
+
+	private function getLuaStackTrace():String {
+		try {
+			LuaL.traceback(lua, lua, '', 0);
+			var trace:String = Lua.tostring(lua, -1);
+			Lua.pop(lua, 1);
+			return trace != null ? trace.trim() : '';
+		} catch(e:Dynamic) {
+			return '';
+		}
 	}
 
 	public function addLocalCallback(name:String, myFunction:Dynamic)
