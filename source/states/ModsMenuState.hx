@@ -20,9 +20,16 @@ class ModsMenuState extends MusicBeatState
 	var bg:FlxSprite;
 	var icon:FlxSprite;
 	var modName:Alphabet;
+	var modVersion:FlxText;
 	var modDesc:FlxText;
+	var modIssues:FlxText;
 	var modRestartText:FlxText;
 	var modsList:ModsList = null;
+
+	var bottomText:FlxText;
+	var searchText:FlxText;
+	var searching:Bool = false;
+	var searchQuery:String = '';
 
 	var bgList:FlxSprite;
 	var buttonReload:MenuButton;
@@ -174,7 +181,15 @@ class ModsMenuState extends MusicBeatState
 		if(modsList.all.length < 1)
 		{
 			buttonDisableAll.visible = buttonDisableAll.enabled = false;
+
+			#if desktop
+			// Nothing to enable yet, point at the folder they need to drop a mod into instead
+			buttonEnableAll.visible = buttonEnableAll.enabled = false;
+			var folderButton = new MenuButton(buttonX, myY, buttonWidth, buttonHeight, "MODS FOLDER", openModsFolder);
+			add(folderButton);
+			#else
 			buttonEnableAll.visible = true;
+			#end
 
 			var myX = bgList.x + bgList.width + 20;
 			noModsTxt = new FlxText(myX, 0, FlxG.width - myX - 20, "NO MODS INSTALLED\nPRESS " + daButton + " TO EXIT OR INSTALL A MOD", 48);
@@ -211,6 +226,10 @@ class ModsMenuState extends MusicBeatState
 		modName.scaleY = 0.8;
 		add(modName);
 
+		modVersion = new FlxText(icon.x + 168, bgTitle.y + bgTitle.height - 42, 620, "", 18);
+		modVersion.setFormat(Paths.font("vcr.ttf"), 18, 0xFFB4B4B4, LEFT);
+		add(modVersion);
+
 		bgDescription = FlxSpriteUtil.drawRoundRectComplex(new FlxSprite(bgTitle.x, bgTitle.y + 200).makeGraphic(840, 450, FlxColor.TRANSPARENT), 0, 0, 840, 450, 0, 0, 15, 15, FlxColor.BLACK);
 		bgDescription.alpha = 0.6;
 		add(bgDescription);
@@ -218,6 +237,12 @@ class ModsMenuState extends MusicBeatState
 		modDesc = new FlxText(bgDescription.x + 15, bgDescription.y + 15, bgDescription.width - 30, "", 24);
 		modDesc.setFormat(Paths.font("vcr.ttf"), 24, FlxColor.WHITE, LEFT);
 		add(modDesc);
+
+		// Broken pack.json, missing dependencies and the like get listed right under the description
+		modIssues = new FlxText(bgDescription.x + 15, bgDescription.y + 15, bgDescription.width - 30, "", 20);
+		modIssues.setFormat(Paths.font("vcr.ttf"), 20, 0xFFFF6666, LEFT, FlxTextBorderStyle.OUTLINE, FlxColor.BLACK);
+		modIssues.borderSize = 1;
+		add(modIssues);
 
 		var myHeight = 100;
 		modRestartText = new FlxText(bgDescription.x + 15, bgDescription.y + bgDescription.height - myHeight - 25, bgDescription.width - 30, "* Moving or Toggling On/Off this Mod will restart the game.", 16);
@@ -309,7 +334,14 @@ class ModsMenuState extends MusicBeatState
 			for (btn in buttons) btn.enabled = false;
 			button.focusChangeCallback = null;
 		}
-		
+
+		#if desktop
+		// The left half of the button bar was empty, so the mods folder shortcut lives there
+		var folderButton = new MenuButton(bgButtons.x + 10, buttonsY, 300, 80, "MODS FOLDER", openModsFolder);
+		add(folderButton);
+		buttons.push(folderButton);
+		#end
+
 		add(bgList);
 		add(modsGroup);
 		_lastControllerMode = controls.controllerMode;
@@ -320,10 +352,21 @@ class ModsMenuState extends MusicBeatState
 		bottomBG.alpha = 0.6;
 		add(bottomBG);
 
-		var bottomText = new FlxText(bottomBG.x, bottomBG.y + 4, FlxG.width, "Press " + daButton + " To Leave", 16);
+		var leaveHint:String = "Press " + daButton + " To Leave";
+		#if desktop
+		if(!controls.mobileC && modsList.all.length > 1) leaveHint += "     Press TAB To Search";
+		#end
+
+		bottomText = new FlxText(bottomBG.x, bottomBG.y + 4, FlxG.width, leaveHint, 16);
 		bottomText.setFormat(Paths.font("vcr.ttf"), 16, FlxColor.WHITE, CENTER);
 		bottomText.scrollFactor.set();
 		add(bottomText);
+
+		searchText = new FlxText(bottomBG.x, bottomBG.y + 4, FlxG.width, "", 16);
+		searchText.setFormat(Paths.font("vcr.ttf"), 16, FlxColor.YELLOW, CENTER);
+		searchText.scrollFactor.set();
+		searchText.visible = false;
+		add(searchText);
 
 		#if mobile
 		addTouchPad("UP_DOWN", "B");
@@ -346,6 +389,23 @@ class ModsMenuState extends MusicBeatState
 	var exiting:Bool = false;
 	override function update(elapsed:Float)
 	{
+		// Search takes over the keyboard while it's open, so it gets first say
+		if(searching)
+		{
+			updateSearch();
+			super.update(elapsed);
+			return;
+		}
+		else if(!controls.mobileC && !exiting && modsList.all.length > 1 && FlxG.keys.justPressed.TAB)
+		{
+			searching = true;
+			searchQuery = '';
+			updateSearchText();
+			FlxG.sound.play(Paths.sound('scrollMenu'), 0.6);
+			super.update(elapsed);
+			return;
+		}
+
 		if(controls.BACK && hoveringOnMods && !exiting)
 		{
 			exiting = true;
@@ -599,6 +659,112 @@ class ModsMenuState extends MusicBeatState
 		super.update(elapsed);
 	}
 
+	function openModsFolder()
+	{
+		#if desktop
+		var modFolder:String = Paths.mods();
+		if(!FileSystem.exists(modFolder))
+		{
+			trace('created missing mods folder');
+			FileSystem.createDirectory(modFolder);
+		}
+		CoolUtil.openFolder(modFolder);
+		#end
+	}
+
+	function updateSearch()
+	{
+		if(FlxG.keys.justPressed.ESCAPE || FlxG.keys.justPressed.TAB || FlxG.keys.justPressed.ENTER)
+		{
+			closeSearch();
+			return;
+		}
+
+		var changed:Bool = false;
+		if(FlxG.keys.justPressed.BACKSPACE)
+		{
+			if(searchQuery.length < 1)
+			{
+				closeSearch();
+				return;
+			}
+			searchQuery = searchQuery.substr(0, searchQuery.length - 1);
+			changed = true;
+		}
+		else
+		{
+			var typed:String = typedCharacter();
+			if(typed != null && searchQuery.length < 24)
+			{
+				searchQuery += typed;
+				changed = true;
+			}
+		}
+
+		if(changed)
+		{
+			updateSearchText();
+			jumpToSearchResult();
+		}
+	}
+
+	// FlxKey values are plain ASCII codes for letters, digits and space
+	function typedCharacter():String
+	{
+		var key:Int = FlxG.keys.firstJustPressed();
+		if(key < 0) return null;
+
+		if(key == 32) return ' ';
+		if(key >= 65 && key <= 90) return String.fromCharCode(key).toLowerCase();
+		if(key >= 48 && key <= 57) return String.fromCharCode(key);
+		return null;
+	}
+
+	function updateSearchText()
+	{
+		searchText.text = 'SEARCH: ' + (searchQuery.length > 0 ? searchQuery : '_') + '   (ENTER or ESC to close)';
+		searchText.visible = true;
+		bottomText.visible = false;
+	}
+
+	function closeSearch()
+	{
+		searching = false;
+		searchQuery = '';
+		searchText.visible = false;
+		bottomText.visible = true;
+
+		for (mod in modsGroup.members) if(mod != null) mod.dimmed = false;
+		updateItemPositions();
+		FlxG.sound.play(Paths.sound('cancelMenu'), 0.6);
+	}
+
+	// Dims what doesn't match instead of hiding it, so drag reordering keeps working while searching
+	function jumpToSearchResult()
+	{
+		var needle:String = searchQuery.toLowerCase();
+		var firstMatch:Int = -1;
+
+		for (i => mod in modsGroup.members)
+		{
+			if(mod == null) continue;
+
+			var match:Bool = needle.length < 1
+				|| mod.name.toLowerCase().indexOf(needle) >= 0
+				|| mod.folder.toLowerCase().indexOf(needle) >= 0;
+
+			mod.dimmed = !match;
+			if(match && firstMatch < 0) firstMatch = i;
+		}
+
+		if(needle.length > 0 && firstMatch >= 0 && firstMatch != curSelectedMod)
+		{
+			curSelectedMod = firstMatch;
+			updateModDisplayData();
+		}
+		else updateItemPositions();
+	}
+
 	function changeSelectedButton(add:Int = 0)
 	{
 		var max = buttons.length - 1;
@@ -742,6 +908,21 @@ class ModsMenuState extends MusicBeatState
 		modName.y = modNameInitialY - (modName.height / 2);
 		modRestartText.visible = curMod.mustRestart;
 		modDesc.text = curMod.desc;
+		modVersion.text = (curMod.version != null) ? 'v' + curMod.version : '';
+
+		var issueLines:Array<String> = [];
+		var fatal:Bool = false;
+		for (issue in curMod.issues)
+		{
+			issueLines.push('- ' + issue.message);
+			if(issue.fatal) fatal = true;
+		}
+
+		modIssues.visible = (issueLines.length > 0);
+		modIssues.text = issueLines.join('\n');
+		modIssues.color = fatal ? 0xFFFF6666 : 0xFFFFCC44;
+		// Sits under the description, but never on top of the restart warning
+		modIssues.y = Math.min(modDesc.y + modDesc.height + 14, modRestartText.y - modIssues.height - 8);
 
 		for (button in buttons) if(button.focusChangeCallback != null) button.focusChangeCallback(button.onFocus);
 		settingsButton.enabled = (curMod.settings != null && curMod.settings.length > 0);
@@ -766,6 +947,7 @@ class ModsMenuState extends MusicBeatState
 			
 			mod.alpha = 0.6;
 			if(i == curSelectedMod) mod.alpha = 1;
+			if(mod.dimmed) mod.alpha = 0.25; // filtered out by the search
 			mod.selectBg.visible = (i == curSelectedMod && hoveringOnMods);
 		}
 	}
@@ -813,6 +995,7 @@ class ModsMenuState extends MusicBeatState
 	function reload()
 	{
 		saveTxt();
+		Mods.reload(); // pack.json files may have been edited while the game was running
 		FlxG.autoPause = ClientPrefs.data.autoPause;
 		FlxTransitionableState.skipNextTransIn = true;
 		FlxTransitionableState.skipNextTransOut = true;
@@ -822,20 +1005,8 @@ class ModsMenuState extends MusicBeatState
 	
 	function saveTxt()
 	{
-		var fileStr:String = '';
-		for (mod in modsList.all)
-		{
-			if(mod.trim().length < 1) continue;
-
-			if(fileStr.length > 0) fileStr += '\n';
-
-			var on = '1';
-			if(modsList.disabled.contains(mod)) on = '0';
-			fileStr += '$mod|$on';
-		}
-
-		var path:String = 'modsList.txt';
-		File.saveContent(path, fileStr);
+		// Writes modsList.txt and refreshes the cached list, load order and issues in one go
+		Mods.saveModsList(modsList);
 	}
 }
 
@@ -849,19 +1020,28 @@ class ModItem extends FlxSpriteGroup
 	// options
 	public var name:String = 'Unknown Mod';
 	public var desc:String = 'No description provided.';
+	public var version:String = null;
 	public var iconFps:Int = 10;
 	public var bgColor:FlxColor = 0xFF665AFF;
 	public var pack:Dynamic = null;
 	public var folder:String = 'unknownMod';
 	public var mustRestart:Bool = false;
 	public var settings:Array<Dynamic> = null;
+	public var issues:Array<ModIssue> = [];
+	public var hasFatalIssues:Bool = false;
+	public var dimmed:Bool = false;
 
 	public function new(folder:String)
 	{
 		super();
 
 		this.folder = folder;
-		pack = Mods.getPack(folder);
+
+		var meta:ModMetadata = Mods.getMetadata(folder);
+		pack = meta.pack;
+
+		issues = Mods.getIssues(folder);
+		for (issue in issues) if(issue.fatal) { hasFatalIssues = true; break; }
 
 		var path:String = Paths.mods('$folder/data/settings.json');
 		if(FileSystem.exists(path))
@@ -874,9 +1054,15 @@ class ModItem extends FlxSpriteGroup
 			}
 			catch(e:Dynamic)
 			{
-				var errorTitle = 'Mod name: ' + Mods.currentModDirectory;
-				var errorMsg = 'An error occurred: $e';
-				CoolUtil.showPopUp(errorMsg, errorTitle);
+				// Listed on the description panel instead of a blocking popup, next to the pack.json errors
+				trace('ModsMenuState: couldn\'t parse "$path": $e');
+				issues.push({
+					mod: folder,
+					kind: ModIssueKind.BROKEN_PACK,
+					target: null,
+					fatal: false,
+					message: 'data/settings.json couldn\'t be read: $e'
+				});
 			}
 		}
 
@@ -912,21 +1098,21 @@ class ModItem extends FlxSpriteGroup
 		icon.scale.set(0.5, 0.5);
 		icon.updateHitbox();
 		
-		this.name = folder;
-		if(pack != null)
+		this.name = meta.name;
+		this.desc = meta.description;
+		this.version = meta.version;
+		this.iconFps = meta.iconFramerate;
+		this.mustRestart = meta.restart;
+		if(meta.color != null)
 		{
-			if(pack.name != null) this.name = pack.name;
-			if(pack.description != null) this.desc = pack.description;
-			if(pack.iconFramerate != null) this.iconFps = pack.iconFramerate;
-			if(pack.color != null)
-			{
-				this.bgColor = FlxColor.fromRGB(pack.color[0] != null ? pack.color[0] : 170,
-												pack.color[1] != null ? pack.color[1] : 0,
-												pack.color[2] != null ? pack.color[2] : 255);
-			}
-			this.mustRestart = (pack.restart == true);
+			this.bgColor = FlxColor.fromRGB(meta.color[0] != null ? meta.color[0] : 170,
+											meta.color[1] != null ? meta.color[1] : 0,
+											meta.color[2] != null ? meta.color[2] : 255);
 		}
-		text.text = this.name;
+
+		// Marks mods that won't work as they are, the Mods menu spells out why on the description panel
+		text.text = hasFatalIssues ? '! ' + this.name : this.name;
+		if(hasFatalIssues) text.color = 0xFFFFCC44;
 
 		if(bmp != null)
 		{

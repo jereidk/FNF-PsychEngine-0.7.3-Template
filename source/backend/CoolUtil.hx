@@ -111,11 +111,18 @@ class CoolUtil
 		#if sys
 			if(!absolute) folder =  Sys.getCwd() + '$folder';
 
+			// Only Windows wants backslashes, xdg-open/open choke on them
+			#if windows
 			folder = folder.replace('/', '\\');
-			if(folder.endsWith('/')) folder.substr(0, folder.length - 1);
+			if(folder.endsWith('\\')) folder = folder.substr(0, folder.length - 1);
+			#else
+			if(folder.endsWith('/')) folder = folder.substr(0, folder.length - 1);
+			#end
 
 			#if linux
 			var command:String = '/usr/bin/xdg-open';
+			#elseif mac
+			var command:String = 'open';
 			#else
 			var command:String = 'explorer.exe';
 			#end

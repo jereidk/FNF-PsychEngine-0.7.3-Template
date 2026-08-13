@@ -54,6 +54,9 @@ _____________________________________
 ## Mod Support
 * Probably one of the main points of this engine, you can code in .lua files outside of the source code, making your own weeks without even messing with the source!
 * Comes with a Mod Organizing/Disabling Menu.
+* Mods can declare a version, the engine version they need, and which other mods they depend on or clash with. Anything wrong (broken `pack.json`, missing or disabled dependency, version mismatch) is spelled out on the Mods menu instead of failing silently.
+* The Mods menu has a search (TAB) and a shortcut to the `mods/` folder.
+* See [docs/mods.md](docs/mods.md) for the full `pack.json` reference.
 
 
 ## Atleast one change to every week:
