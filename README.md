@@ -53,7 +53,8 @@ _____________________________________
 
 ## Mod Support
 * Probably one of the main points of this engine, you can code in .lua files outside of the source code, making your own weeks without even messing with the source!
-* Comes with a Mod Organizing/Disabling Menu.
+* **The Mods menu is what you launch the game from.** It lists the base game alongside every installed mod: pick one, press ENTER, and the game restarts into *that mod* — its own title screen, main menu, story mode and freeplay. Backing out of the mod's main menu returns you to the Mods menu.
+* Because only the mod you entered is loaded, mods no longer dump their songs into the base game's Freeplay just for being installed.
 * Mods can declare a version, the engine version they need, and which other mods they depend on or clash with. Anything wrong (broken `pack.json`, missing or disabled dependency, version mismatch) is spelled out on the Mods menu instead of failing silently.
 * The Mods menu has a search (TAB) and a shortcut to the `mods/` folder.
 * See [docs/mods.md](docs/mods.md) for the full `pack.json` reference.

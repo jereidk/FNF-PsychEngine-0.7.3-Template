@@ -1,5 +1,16 @@
 You can either edit files or add entirely new ones here.
 
+HOW MODS ARE PLAYED:
+The Mods menu is what launches the game. It lists "Friday Night Funkin'" (the base game) and
+every mod you installed. Pick one, press ENTER, and the game restarts into that mod: its own
+title screen, main menu, story mode and freeplay. Pressing back on the mod's main menu leaves
+the mod and returns to the Mods menu.
+
+That means your mod owns the whole game while it's the one being played, and it also means an
+installed mod no longer dumps its songs into the base game's freeplay. Just drop your custom
+images/logoBumpin.png, images/mainmenu/, data/introText.txt and so on into your mod folder and
+they get used automatically.
+
 ABOUT EDITTING:
 It doesn't matter if you want to edit something in assets/shared/images/ or assets/preload/images/,
 you will have to put the editted files in mods/images/, it will be handled automatically by the engine.

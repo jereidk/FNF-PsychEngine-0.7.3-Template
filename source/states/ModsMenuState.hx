@@ -25,6 +25,7 @@ class ModsMenuState extends MusicBeatState
 	var modIssues:FlxText;
 	var modRestartText:FlxText;
 	var modsList:ModsList = null;
+	var modCount:Int = 0; // real mods, not counting the base game entry
 
 	var bottomText:FlxText;
 	var searchText:FlxText;
@@ -37,7 +38,9 @@ class ModsMenuState extends MusicBeatState
 	var buttonEnableAll:MenuButton;
 	var buttonDisableAll:MenuButton;
 	var buttons:Array<MenuButton> = [];
+	var moveButtons:Array<MenuButton> = [];
 	var settingsButton:MenuButton;
+	var toggleButton:MenuButton;
 
 	var bgTitle:FlxSprite;
 	var bgDescription:FlxSprite;
@@ -67,12 +70,20 @@ class ModsMenuState extends MusicBeatState
 		if (controls.mobileC)
 			daButton = 'B';
 		
+		// Reaching the launcher means you left whatever mod you were in, so its assets go away
+		// and the menu itself is drawn with the base game's
+		Mods.exitMod();
+
 		Paths.clearStoredMemory();
 		Paths.clearUnusedMemory();
 		persistentUpdate = false;
 
 		modsList = Mods.parseList();
-		Mods.currentModDirectory = modsList.all[0] != null ? modsList.all[0] : '';
+		modCount = modsList.all.length;
+
+		// The base game is listed like any other mod, so everything is launched the same way.
+		// It's pinned at the top and can't be moved, toggled or saved to modsList.txt.
+		modsList.all.insert(0, Mods.BASE_GAME);
 
 		#if DISCORD_ALLOWED
 		// Updating Discord Rich Presence
@@ -178,39 +189,13 @@ class ModsMenuState extends MusicBeatState
 		
 		checkToggleButtons();
 
-		if(modsList.all.length < 1)
+		if(modCount < 1)
 		{
-			buttonDisableAll.visible = buttonDisableAll.enabled = false;
-
-			#if desktop
-			// Nothing to enable yet, point at the folder they need to drop a mod into instead
+			// The base game is still there to enter, so the menu stays fully usable. update()
+			// keeps polling so a mod dropped into the folder shows up without leaving the menu.
 			buttonEnableAll.visible = buttonEnableAll.enabled = false;
-			var folderButton = new MenuButton(buttonX, myY, buttonWidth, buttonHeight, "MODS FOLDER", openModsFolder);
-			add(folderButton);
-			#else
-			buttonEnableAll.visible = true;
-			#end
-
-			var myX = bgList.x + bgList.width + 20;
-			noModsTxt = new FlxText(myX, 0, FlxG.width - myX - 20, "NO MODS INSTALLED\nPRESS " + daButton + " TO EXIT OR INSTALL A MOD", 48);
-			if(FlxG.random.bool(0.1)) noModsTxt.text += '\nBITCH.'; //meanie
-			noModsTxt.setFormat(Paths.font("vcr.ttf"), 32, FlxColor.WHITE, CENTER, FlxTextBorderStyle.OUTLINE, FlxColor.BLACK);
-			noModsTxt.borderSize = 2;
-			add(noModsTxt);
-			noModsTxt.screenCenter(Y);
-
-			var txt = new FlxText(bgList.x + 15, bgList.y + 15, bgList.width - 30, "No Mods found.", 16);
-			txt.setFormat(Paths.font("vcr.ttf"), 16, FlxColor.WHITE);
-			add(txt);
-
+			buttonDisableAll.visible = buttonDisableAll.enabled = false;
 			FlxG.autoPause = false;
-			changeSelectedMod();
-
-			#if mobile
-			addTouchPad("NONE", "B");
-			#end
-			
-			return super.create();
 		}
 		//
 
@@ -257,29 +242,27 @@ class ModsMenuState extends MusicBeatState
 		var buttonsX = bgButtons.x + 320;
 		var buttonsY = bgButtons.y + 10;
 
-		var button = new MenuButton(buttonsX, buttonsY, 80, 80, Paths.image('modsMenuButtons'), function() moveModToPosition(0), 54, 54); //Move to the top
+		// Position 1, not 0: the base game entry is pinned to the top of the list
+		var button = new MenuButton(buttonsX, buttonsY, 80, 80, Paths.image('modsMenuButtons'), function() moveModToPosition(1), 54, 54); //Move to the top
 		button.icon.animation.add('icon', [0]);
 		button.icon.animation.play('icon', true);
 		add(button);
 		buttons.push(button);
+		moveButtons.push(button);
 
 		var button = new MenuButton(buttonsX + 100, buttonsY, 80, 80, Paths.image('modsMenuButtons'), function() moveModToPosition(curSelectedMod - 1), 54, 54); //Move up
 		button.icon.animation.add('icon', [1]);
 		button.icon.animation.play('icon', true);
 		add(button);
 		buttons.push(button);
+		moveButtons.push(button);
 
 		var button = new MenuButton(buttonsX + 200, buttonsY, 80, 80, Paths.image('modsMenuButtons'), function() moveModToPosition(curSelectedMod + 1), 54, 54); //Move down
 		button.icon.animation.add('icon', [2]);
 		button.icon.animation.play('icon', true);
 		add(button);
 		buttons.push(button);
-		
-		if(modsList.all.length < 2)
-		{
-			for (button in buttons)
-				button.enabled = false;
-		}
+		moveButtons.push(button);
 
 		settingsButton = new MenuButton(buttonsX + 300, buttonsY, 80, 80, Paths.image('modsMenuButtons'), function() //Settings
 		{
@@ -298,9 +281,11 @@ class ModsMenuState extends MusicBeatState
 		if(modsGroup.members[curSelectedMod].settings == null || modsGroup.members[curSelectedMod].settings.length < 1)
 			settingsButton.enabled = false;
 
-		var button = new MenuButton(buttonsX + 400, buttonsY, 80, 80, Paths.image('modsMenuButtons'), function() //On/Off
+		toggleButton = new MenuButton(buttonsX + 400, buttonsY, 80, 80, Paths.image('modsMenuButtons'), function() //On/Off
 		{
 			var curMod:ModItem = modsGroup.members[curSelectedMod];
+			if(curMod == null || curMod.folder == Mods.BASE_GAME) return; // the base game can't be turned off
+
 			var mod:String = curMod.folder;
 			if(!modsList.disabled.contains(mod)) //Enable
 			{
@@ -313,27 +298,22 @@ class ModsMenuState extends MusicBeatState
 				modsList.enabled.push(mod);
 			}
 			curMod.icon.color = modsList.disabled.contains(mod) ? 0xFFFF6666 : FlxColor.WHITE;
-			curMod.text.color = modsList.disabled.contains(mod) ? FlxColor.GRAY : FlxColor.WHITE;
+			curMod.text.color = modsList.disabled.contains(mod) ? FlxColor.GRAY
+				: (curMod.hasFatalIssues ? 0xFFFFCC44 : FlxColor.WHITE);
 
 			if(curMod.mustRestart) waitingToRestart = true;
 			updateModDisplayData();
 			checkToggleButtons();
 			FlxG.sound.play(Paths.sound('scrollMenu'), 0.6);
 		}, 54, 54);
-		button.icon.animation.add('icon', [4]);
-		button.icon.animation.play('icon', true);
-		add(button);
-		buttons.push(button);
-		button.focusChangeCallback = function(focus:Bool) {
+		toggleButton.icon.animation.add('icon', [4]);
+		toggleButton.icon.animation.play('icon', true);
+		add(toggleButton);
+		buttons.push(toggleButton);
+		toggleButton.focusChangeCallback = function(focus:Bool) {
 			if(!focus)
-				button.bg.color = modsList.enabled.contains(modsGroup.members[curSelectedMod].folder) ? FlxColor.GREEN : 0xFFFF6666;
+				toggleButton.bg.color = modsList.enabled.contains(modsList.all[curSelectedMod]) ? FlxColor.GREEN : 0xFFFF6666;
 		};
-
-		if(modsList.all.length < 1)
-		{
-			for (btn in buttons) btn.enabled = false;
-			button.focusChangeCallback = null;
-		}
 
 		#if desktop
 		// The left half of the button bar was empty, so the mods folder shortcut lives there
@@ -344,6 +324,17 @@ class ModsMenuState extends MusicBeatState
 
 		add(bgList);
 		add(modsGroup);
+
+		if(modCount < 1)
+		{
+			// Goes on top of the list panel, under the base game entry
+			noModsTxt = new FlxText(bgList.x + 15, bgList.y + 105, bgList.width - 30,
+				"No mods installed.\nDrop one into the mods\nfolder and it shows up here.", 16);
+			noModsTxt.setFormat(Paths.font("vcr.ttf"), 16, FlxColor.WHITE, CENTER, FlxTextBorderStyle.OUTLINE, FlxColor.BLACK);
+			noModsTxt.borderSize = 2;
+			add(noModsTxt);
+		}
+
 		_lastControllerMode = controls.controllerMode;
 
 		changeSelectedMod();
@@ -352,9 +343,10 @@ class ModsMenuState extends MusicBeatState
 		bottomBG.alpha = 0.6;
 		add(bottomBG);
 
-		var leaveHint:String = "Press " + daButton + " To Leave";
+		var acceptButton:String = controls.mobileC ? "A" : "ENTER";
+		var leaveHint:String = "Press " + acceptButton + " To Play     Press " + daButton + " To Leave";
 		#if desktop
-		if(!controls.mobileC && modsList.all.length > 1) leaveHint += "     Press TAB To Search";
+		if(!controls.mobileC && modCount > 0) leaveHint += "     Press TAB To Search";
 		#end
 
 		bottomText = new FlxText(bottomBG.x, bottomBG.y + 4, FlxG.width, leaveHint, 16);
@@ -369,7 +361,7 @@ class ModsMenuState extends MusicBeatState
 		add(searchText);
 
 		#if mobile
-		addTouchPad("UP_DOWN", "B");
+		addTouchPad("UP_DOWN", "A_B"); // A enters the selected mod, B leaves the menu
 		touchPad.y -= 215; // so that you can press the buttons.
 		#end
 		
@@ -450,7 +442,35 @@ class ModsMenuState extends MusicBeatState
 
 		if(controls.UI_DOWN_R || controls.UI_UP_R) holdTime = 0;
 
-		if(modsList.all.length > 0)
+		if(modCount < 1)
+		{
+			noModsSine += 180 * elapsed;
+			noModsTxt.alpha = 1 - Math.sin((Math.PI * noModsSine) / 180);
+
+			// Keep refreshing the mod list every second until a mod shows up in the folder
+			nextAttempt -= elapsed;
+			if(nextAttempt < 0)
+			{
+				nextAttempt = 1;
+				@:privateAccess
+				Mods.updateModList();
+
+				var refreshed:ModsList = Mods.parseList();
+				if(refreshed.all.length > 0)
+				{
+					trace('mod(s) found! reloading');
+
+					// Take the fresh list over, otherwise reload() would save the stale one
+					// back out and wipe the mod that was just found
+					modsList = refreshed;
+					modsList.all.insert(0, Mods.BASE_GAME);
+					reload();
+					return;
+				}
+			}
+		}
+
+		// List input. The base game entry means the list is never empty, so this always runs
 		{
 			if(controls.controllerMode && holdingMod)
 			{
@@ -520,7 +540,7 @@ class ModsMenuState extends MusicBeatState
 								for (i in centerMod-2...centerMod+3)
 								{
 									var mod = modsGroup.members[i];
-									if(mod != null && mod.visible && FlxG.mouse.overlaps(mod) && curSelectedMod != i)
+									if(i > 0 && mod != null && mod.visible && FlxG.mouse.overlaps(mod) && curSelectedMod != i)
 									{
 										moveModToPosition(i);
 										moved = true;
@@ -545,7 +565,7 @@ class ModsMenuState extends MusicBeatState
 											var newPos = curSelectedMod;
 											if(FlxG.mouse.y < bgList.y) newPos--;
 											else newPos++;
-											moveModToPosition(Std.int(Math.max(0, Math.min(modsGroup.length - 1, newPos))));
+											moveModToPosition(Std.int(Math.max(1, Math.min(modsGroup.length - 1, newPos))));
 										}
 									}
 								}
@@ -568,7 +588,12 @@ class ModsMenuState extends MusicBeatState
 			{
 				if(hoveringOnMods)
 				{
-					if(controls.UI_RIGHT_P)
+					if(controls.ACCEPT)
+					{
+						enterSelectedMod();
+						return;
+					}
+					else if(controls.UI_RIGHT_P)
 					{
 						hoveringOnMods = false;
 						var button = getButton();
@@ -636,27 +661,50 @@ class ModsMenuState extends MusicBeatState
 				}
 			}
 		}
-		else
-		{
-			noModsSine += 180 * elapsed;
-			noModsTxt.alpha = 1 - Math.sin((Math.PI * noModsSine) / 180);
-			
-			// Keep refreshing mods list every 2 seconds until you add a mod on the folder
-			nextAttempt -= elapsed;
-			if(nextAttempt < 0)
-			{
-				nextAttempt = 1;
-				@:privateAccess
-				Mods.updateModList();
-				modsList = Mods.parseList();
-				if(modsList.all.length > 0)
-				{
-					trace('mod(s) found! reloading');
-					reload();
-				}
-			}
-		}
 		super.update(elapsed);
+	}
+
+	/**
+	 * Launches whatever is selected: a mod, or the base game.
+	 * The game is reset so nothing loaded before the switch survives, and it comes back up on
+	 * TitleState, which is now the mod's own title screen, main menu, story mode and freeplay.
+	 */
+	function enterSelectedMod()
+	{
+		if(exiting) return;
+
+		var curMod:ModItem = modsGroup.members[curSelectedMod];
+		if(curMod == null) return;
+
+		var isBase:Bool = (curMod.folder == Mods.BASE_GAME);
+		if(!isBase && modsList.disabled.contains(curMod.folder))
+		{
+			// Turn it on first, otherwise none of its content would load
+			FlxG.sound.play(Paths.sound('cancelMenu'));
+			return;
+		}
+
+		exiting = true;
+		saveTxt();
+		Mods.enterMod(isBase ? '' : curMod.folder);
+
+		FlxG.sound.play(Paths.sound('confirmMenu'));
+		if(colorTween != null) colorTween.cancel();
+
+		persistentUpdate = false;
+		FlxG.autoPause = ClientPrefs.data.autoPause;
+		FlxG.mouse.visible = false;
+
+		// Same restart path the menu already used for mods that ask for one
+		TitleState.initialized = false;
+		TitleState.closedState = false;
+		if(FlxG.sound.music != null) FlxG.sound.music.fadeOut(0.3);
+		if(FreeplayState.vocals != null)
+		{
+			FreeplayState.vocals.fadeOut(0.3);
+			FreeplayState.vocals = null;
+		}
+		FlxG.camera.fade(FlxColor.BLACK, 0.5, false, FlxG.resetGame, false);
 	}
 
 	function openModsFolder()
@@ -924,8 +972,13 @@ class ModsMenuState extends MusicBeatState
 		// Sits under the description, but never on top of the restart warning
 		modIssues.y = Math.min(modDesc.y + modDesc.height + 14, modRestartText.y - modIssues.height - 8);
 
+		// The base game entry can't be reordered, turned off or configured
+		var isBase:Bool = (curMod.folder == Mods.BASE_GAME);
+		for (button in moveButtons) button.enabled = !isBase && modCount > 1;
+		toggleButton.enabled = !isBase;
+		settingsButton.enabled = !isBase && (curMod.settings != null && curMod.settings.length > 0);
+
 		for (button in buttons) if(button.focusChangeCallback != null) button.focusChangeCallback(button.onFocus);
-		settingsButton.enabled = (curMod.settings != null && curMod.settings.length > 0);
 	}
 
 	var centerMod:Int = 2;
@@ -956,8 +1009,11 @@ class ModsMenuState extends MusicBeatState
 	function moveModToPosition(?mod:String = null, position:Int = 0)
 	{
 		if(mod == null) mod = modsList.all[curSelectedMod];
-		if(position >= modsList.all.length) position = 0;
-		else if(position < 0) position = modsList.all.length-1;
+		if(mod == Mods.BASE_GAME) return; // pinned to the top of the list
+
+		// Index 0 belongs to the base game, so mods wrap around between 1 and the end
+		if(position >= modsList.all.length) position = 1;
+		else if(position < 1) position = modsList.all.length-1;
 
 		trace('Moved mod $mod to position $position');
 		var id:Int = modsList.all.indexOf(mod);
@@ -1030,21 +1086,27 @@ class ModItem extends FlxSpriteGroup
 	public var issues:Array<ModIssue> = [];
 	public var hasFatalIssues:Bool = false;
 	public var dimmed:Bool = false;
+	public var isBaseGame:Bool = false;
 
 	public function new(folder:String)
 	{
 		super();
 
 		this.folder = folder;
+		this.isBaseGame = (folder == Mods.BASE_GAME);
 
-		var meta:ModMetadata = Mods.getMetadata(folder);
-		pack = meta.pack;
+		var meta:ModMetadata = null;
+		if(!isBaseGame)
+		{
+			meta = Mods.getMetadata(folder);
+			pack = meta.pack;
 
-		issues = Mods.getIssues(folder);
-		for (issue in issues) if(issue.fatal) { hasFatalIssues = true; break; }
+			issues = Mods.getIssues(folder);
+			for (issue in issues) if(issue.fatal) { hasFatalIssues = true; break; }
+		}
 
 		var path:String = Paths.mods('$folder/data/settings.json');
-		if(FileSystem.exists(path))
+		if(!isBaseGame && FileSystem.exists(path))
 		{
 			var data:String = File.getContent(path);
 			try
@@ -1082,8 +1144,8 @@ class ModItem extends FlxSpriteGroup
 		add(text);
 
 		var isPixel = false;
-		var bmp = Paths.cacheBitmap(Paths.mods('$folder/pack.png'));
-		if(bmp == null)
+		var bmp = isBaseGame ? null : Paths.cacheBitmap(Paths.mods('$folder/pack.png'));
+		if(bmp == null && !isBaseGame)
 		{
 			bmp = Paths.cacheBitmap(Paths.mods('$folder/pack-pixel.png'));
 			isPixel = true;
@@ -1094,20 +1156,34 @@ class ModItem extends FlxSpriteGroup
 			icon.loadGraphic(bmp, true, 150, 150);
 			if(isPixel) icon.antialiasing = false;
 		}
-		else icon.loadGraphic(Paths.image('unknownMod'), true, 150, 150);
+		else
+		{
+			// Drop a 150x150 assets/shared/images/basegame.png in to give the base game its own icon.
+			// ignoreMods so a mod can't hijack the entry that's supposed to represent the base game.
+			var fallback:String = (isBaseGame && Paths.fileExists('images/basegame.png', IMAGE, true)) ? 'basegame' : 'unknownMod';
+			icon.loadGraphic(Paths.image(fallback), true, 150, 150);
+		}
 		icon.scale.set(0.5, 0.5);
 		icon.updateHitbox();
-		
-		this.name = meta.name;
-		this.desc = meta.description;
-		this.version = meta.version;
-		this.iconFps = meta.iconFramerate;
-		this.mustRestart = meta.restart;
-		if(meta.color != null)
+
+		if(isBaseGame)
 		{
-			this.bgColor = FlxColor.fromRGB(meta.color[0] != null ? meta.color[0] : 170,
-											meta.color[1] != null ? meta.color[1] : 0,
-											meta.color[2] != null ? meta.color[2] : 255);
+			this.name = 'Friday Night Funkin\'';
+			this.desc = 'The base game, with everything that ships with the engine.\n\nMods you install show up under this entry. Pick one and press ENTER to play it instead.';
+		}
+		else
+		{
+			this.name = meta.name;
+			this.desc = meta.description;
+			this.version = meta.version;
+			this.iconFps = meta.iconFramerate;
+			this.mustRestart = meta.restart;
+			if(meta.color != null)
+			{
+				this.bgColor = FlxColor.fromRGB(meta.color[0] != null ? meta.color[0] : 170,
+												meta.color[1] != null ? meta.color[1] : 0,
+												meta.color[2] != null ? meta.color[2] : 255);
+			}
 		}
 
 		// Marks mods that won't work as they are, the Mods menu spells out why on the description panel

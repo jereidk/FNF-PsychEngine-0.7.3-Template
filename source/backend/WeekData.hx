@@ -75,17 +75,21 @@ class WeekData {
 		weeksList = [];
 		weeksLoaded.clear();
 		#if MODS_ALLOWED
-		var directories:Array<String> = [Paths.mods(), Paths.getSharedPath()];
+		// Only the mod you entered and the global ones, so an enabled mod that you haven't
+		// entered from the Mods menu no longer shows up on the base game's weeks
+		var directories:Array<String> = [Paths.mods()];
+		if(!Mods.isStandalone()) directories.push(Paths.getSharedPath());
 		var originalLength:Int = directories.length;
 
-		for (mod in Mods.getLoadOrder())
+		for (mod in Mods.getActiveMods())
 			directories.push(Paths.mods(mod + '/'));
 		#else
 		var directories:Array<String> = [Paths.getSharedPath()];
 		var originalLength:Int = directories.length;
 		#end
 
-		var sexList:Array<String> = CoolUtil.coolTextFile(Paths.getSharedPath('weeks/weekList.txt'));
+		// A standalone mod replaces the base game rather than adding to it
+		var sexList:Array<String> = Mods.isStandalone() ? [] : CoolUtil.coolTextFile(Paths.getSharedPath('weeks/weekList.txt'));
 		for (i in 0...sexList.length) {
 			for (j in 0...directories.length) {
 				var fileToCheck:String = directories[j] + 'weeks/' + sexList[i] + '.json';

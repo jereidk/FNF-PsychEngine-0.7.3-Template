@@ -35,7 +35,7 @@ class CreditsState extends MusicBeatState
 		add(grpOptions);
 
 		#if MODS_ALLOWED
-		for (mod in Mods.getLoadOrder()) pushModCreditsToList(mod);
+		for (mod in Mods.getActiveMods()) pushModCreditsToList(mod);
 		#end
 
 		#if mobile

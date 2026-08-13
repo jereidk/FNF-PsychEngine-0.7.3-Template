@@ -28,6 +28,7 @@ typedef ModMetadata = {
 	version:String,
 	restart:Bool,
 	runsGlobally:Bool,
+	standalone:Bool,
 	iconFramerate:Int,
 	color:Array<Dynamic>,
 	dependencies:Array<ModDependency>,
@@ -59,6 +60,19 @@ typedef ModIssue = {
 
 class Mods
 {
+	/**
+	 * Stands for the base game on the Mods menu, which lists it as something you enter like any mod.
+	 * A folder name can never contain a slash, so this can't collide with a real mod.
+	 */
+	public static inline var BASE_GAME:String = '//base';
+
+	/**
+	 * The mod you entered from the Mods menu, empty for the base game.
+	 * Only this mod and the global ones contribute content, so nothing leaks into the base
+	 * Freeplay/Story anymore. Survives FlxG.resetGame(), which is how entering a mod is applied.
+	 */
+	public static var activeMod:String = '';
+
 	static public var currentModDirectory:String = '';
 	public static var ignoreModFolders:Array<String> = [
 		'characters',
@@ -87,6 +101,7 @@ class Mods
 	private static var _packErrors:Map<String, String> = new Map<String, String>();
 	private static var _metaCache:Map<String, ModMetadata> = new Map<String, ModMetadata>();
 	private static var _loadOrder:Array<String> = null;
+	private static var _activeMods:Array<String> = null;
 	private static var _cyclicMods:Array<String> = [];
 	private static var _issues:Array<ModIssue> = null;
 	private static var _lastSavedList:String = null;
@@ -236,6 +251,7 @@ class Mods
 			version: null,
 			restart: false,
 			runsGlobally: false,
+			standalone: false,
 			iconFramerate: 10,
 			color: null,
 			dependencies: [],
@@ -257,6 +273,7 @@ class Mods
 
 			meta.restart = (Reflect.field(pack, 'restart') == true);
 			meta.runsGlobally = (Reflect.field(pack, 'runsGlobally') == true);
+			meta.standalone = (Reflect.field(pack, 'standalone') == true);
 
 			value = Reflect.field(pack, 'iconFramerate');
 			if(value != null)
@@ -543,7 +560,8 @@ class Mods
 
 		for (mod in list.all)
 		{
-			if(mod == null || mod.trim().length < 1) continue;
+			// The Mods menu keeps the base game in its list, it isn't a folder and never gets saved
+			if(mod == null || mod.trim().length < 1 || mod == BASE_GAME) continue;
 
 			var on:Bool = !list.disabled.contains(mod);
 			if(fileStr.length > 0) fileStr += '\n';
@@ -630,6 +648,60 @@ class Mods
 
 		_loadOrder = order;
 		return order.copy();
+	}
+
+	/**
+	 * The mods whose content is live right now: the mod you entered, plus every global mod.
+	 * Everything else is installed but dormant, so an enabled mod no longer dumps its songs
+	 * into the base game's Freeplay just for being enabled.
+	 */
+	public static function getActiveMods():Array<String>
+	{
+		if(_activeMods != null) return _activeMods.copy();
+
+		var order:Array<String> = getLoadOrder();
+		var out:Array<String> = [];
+
+		// The mod you entered outranks the global ones, same as Paths.modFolders() does
+		if(activeMod != null && activeMod.length > 0 && order.contains(activeMod))
+			out.push(activeMod);
+
+		for (mod in order)
+			if(!out.contains(mod) && getMetadata(mod).runsGlobally) out.push(mod);
+
+		_activeMods = out;
+		return out.copy();
+	}
+
+	/**
+	 * Enters a mod, or the base game when given null, an empty string or BASE_GAME.
+	 * The caller is expected to restart the game afterwards so nothing stays cached from before.
+	 */
+	public static function enterMod(folder:String)
+	{
+		if(folder == null || folder == BASE_GAME) folder = '';
+
+		activeMod = folder;
+		currentModDirectory = folder;
+		_activeMods = null;
+	}
+
+	public static function exitMod()
+	{
+		enterMod('');
+	}
+
+	inline public static function isModActive():Bool
+		return activeMod != null && activeMod.length > 0;
+
+	/**
+	 * A standalone mod replaces the base game instead of adding to it, so the vanilla weeks
+	 * are left out while it's the active mod. Set "standalone": true on its pack.json.
+	 */
+	public static function isStandalone():Bool
+	{
+		if(!isModActive()) return false;
+		return getMetadata(activeMod).standalone;
 	}
 
 	/**
@@ -743,6 +815,7 @@ class Mods
 	private static function clearResolvedCache()
 	{
 		_loadOrder = null;
+		_activeMods = null;
 		_cyclicMods = [];
 		_issues = null;
 	}
@@ -762,14 +835,18 @@ class Mods
 		updatedOnState = false; // also drops _listCache
 	}
 
+	/**
+	 * Pins asset lookups back to the mod you entered.
+	 * States reassign currentModDirectory all the time (per song, per week), so they call this
+	 * to get back to a known state. Falls back to the base game if that mod is gone or turned off.
+	 */
 	public static function loadTopMod()
 	{
 		Mods.currentModDirectory = '';
 
 		#if MODS_ALLOWED
-		var list:Array<String> = getLoadOrder();
-		if(list != null && list[0] != null)
-			Mods.currentModDirectory = list[0];
+		if(isModActive() && getActiveMods().contains(activeMod))
+			Mods.currentModDirectory = activeMod;
 		#end
 	}
 }

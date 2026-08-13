@@ -151,6 +151,14 @@ class MainMenuState extends MusicBeatState
 			{
 				selectedSomethin = true;
 				FlxG.sound.play(Paths.sound('cancelMenu'));
+
+				#if MODS_ALLOWED
+				// Inside a mod, backing out of its main menu leaves the mod and returns to the
+				// Mods menu, which is where every mod (and the base game) is launched from
+				if(Mods.isModActive())
+					MusicBeatState.switchState(new ModsMenuState());
+				else
+				#end
 				MusicBeatState.switchState(new TitleState());
 			}
 

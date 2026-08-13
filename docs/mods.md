@@ -3,6 +3,34 @@
 Everything here is optional. A mod written for stock Psych Engine 0.7.3 keeps working
 untouched — the fields below only do something once you actually add them.
 
+## The Mods menu is where the game starts
+
+The Mods menu is no longer just an on/off list, it's what you launch the game from. It shows
+**Friday Night Funkin'** (the base game) pinned at the top, followed by every installed mod.
+Pick one, press **ENTER** (**A** on mobile), and the game restarts *into it*:
+
+```
+Mods menu  ──ENTER──>  the mod's TitleState
+                            └──> its MainMenuState
+                                     ├──> its Story Mode
+                                     └──> its Freeplay
+```
+
+None of that needs any work from the mod. Asset lookups already resolve against the mod you
+entered, so `images/logoBumpin.png`, `images/mainmenu/`, `data/introText.txt`, the menu music
+and everything else come from the mod's own folder when it has them, and fall back to the base
+game when it doesn't.
+
+**BACK on the mod's main menu leaves the mod** and drops you back at the Mods menu.
+
+Because only the mod you entered is live, **mods no longer leak into the base game's Freeplay
+and Story Mode**. Installing and enabling a mod doesn't dump its songs into the vanilla song
+list anymore — you enter the mod to play it. Global mods (`"runsGlobally": true`) are the
+exception: they stay loaded on top of whatever you entered, which is the point of them.
+
+To give the base game entry its own icon, drop a 150x150 `assets/shared/images/basegame.png`
+(a strip of 150x150 frames animates it, same as a mod's `pack.png`).
+
 ## pack.json
 
 Drop a `pack.json` at the root of your mod folder (`mods/yourMod/pack.json`).
@@ -29,7 +57,8 @@ Drop a `pack.json` at the root of your mod folder (`mods/yourMod/pack.json`).
 | `version` | string | Your mod's own version. Other mods can require it. |
 | `engineVersion` | string | Engine version your mod needs, ex. `">=0.7.3"`. `apiVersion` also works. |
 | `restart` | bool | Toggling or moving the mod restarts the game. |
-| `runsGlobally` | bool | Assets and scripts load even when another mod is selected. |
+| `runsGlobally` | bool | Assets and scripts stay loaded on top of whatever mod you entered. |
+| `standalone` | bool | The mod replaces the base game instead of adding to it, so the vanilla weeks are left out while it's the mod you entered. |
 | `iconFramerate` | int | FPS of the animated `pack.png` icon. |
 | `color` | int[3] | RGB background color on the Mods menu. |
 | `dependencies` | list | Mods that must be installed and enabled. |
@@ -55,13 +84,14 @@ so it fails any `>=` requirement.
 
 ## Load order
 
-The Mods menu order is the priority order: the mod at the top wins when two mods ship the
-same file. On top of that, a mod is always placed **before** the mods it depends on, so a
-mod can override assets from its own dependency. Mods that declare no dependencies keep
-exactly the order you set on the menu.
+Only the mod you entered plus the global mods are loaded at any time, and the mod you entered
+outranks the global ones. The Mods menu order decides priority among the global mods: the one
+higher up wins when two ship the same file. On top of that, a mod is always placed **before**
+the mods it depends on, so a mod can override assets from its own dependency. Mods that
+declare no dependencies keep exactly the order you set on the menu.
 
-The resolved order is what the engine actually uses for weeks, credits, achievements,
-global mods and the currently selected mod.
+The base game entry is pinned to the top of the list and can't be moved, turned off or
+configured — it isn't a folder and never gets written to `modsList.txt`.
 
 ## Problems shown on the Mods menu
 
@@ -81,6 +111,7 @@ meaning the mod most likely won't run correctly as things stand.
 
 ## Mods menu extras
 
+- **ENTER** (**A** on mobile) launches the selected mod, or the base game.
 - **TAB** opens a search box. Typing dims everything that doesn't match and jumps to the
   first match. Dragging to reorder keeps working while the search is open. **ENTER** or
   **ESC** closes it.
@@ -94,9 +125,16 @@ meaning the mod most likely won't run correctly as things stand.
 `backend.Mods` is the entry point:
 
 ```haxe
+Mods.activeMod;                // the mod you entered, empty for the base game
+Mods.isModActive();
+Mods.enterMod(folder);         // reset the game afterwards to apply it
+Mods.exitMod();
+Mods.getActiveMods();          // what's actually loaded: activeMod + the global mods
+Mods.isStandalone();
+
 Mods.getMetadata(folder);      // filled-in pack.json, never null
 Mods.getPack(folder);          // raw pack.json, unchanged from before
-Mods.getLoadOrder();           // enabled mods, dependencies resolved
+Mods.getLoadOrder();           // every enabled mod, dependencies resolved
 Mods.getIssues(folder);        // problems found on one mod, or all of them if omitted
 Mods.hasFatalIssues(folder);
 Mods.satisfiesVersion(v, req); // "1.2.0" against ">=1.0.0"
