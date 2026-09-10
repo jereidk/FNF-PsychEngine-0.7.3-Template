@@ -33,8 +33,6 @@ on:
 jobs:
   Build:
     name: ${{ matrix.name }}
-    # Skips every matrix leg whose platform toggle is off; build_all turns everything on
-    if: ${{ inputs.build_all || matrix.enabled }}
     strategy:
       # Selected platforms build independently: one failure must not cancel the rest
       fail-fast: false
@@ -89,3 +87,7 @@ jobs:
         buildArgs: ${{ matrix.buildArgs }}
         artifactName: ${{ matrix.artifactName }}
         artifactPath: ${{ matrix.artifactPath }}
+        # Platform selector: matrix context is unavailable in a job-level `if`
+        # for reusable-workflow calls, so the flag goes through `with:` instead
+        # and build.yml's job skips itself when false.
+        enabled: ${{ inputs.build_all || matrix.enabled }}

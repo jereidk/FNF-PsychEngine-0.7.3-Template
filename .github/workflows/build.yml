@@ -18,6 +18,14 @@ on:
       artifactPath:
         required: true
         type: string
+      # Optional: set to false to skip this build entirely (used by Main's
+      # platform selector -- matrix context is not available in a job-level
+      # `if` for reusable workflow calls, so Main passes it via `with:` and
+      # this job skips itself instead).
+      enabled:
+        required: false
+        type: boolean
+        default: true
 
 env:
   # 4.3.7 is the proven pin for this Lime/Haxe/Flixel/Android stack
@@ -30,6 +38,10 @@ jobs:
   build:
     name: Build
     runs-on: ${{ inputs.os }}
+    # Platform selector support: a disabled leg never starts (and never
+    # consumes runner minutes). Kept inside build.yml so release.yml and
+    # release-action.yml need no changes.
+    if: ${{ inputs.enabled != false }}
     # Explicit grant: under restricted default token policies the actions:write
     # permission is what makes cache saves and the stale-cache prune actually
     # work (otherwise they fail SILENTLY -- see Indie-Cross-Public's CI.yml,
