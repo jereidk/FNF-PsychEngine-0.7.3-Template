@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 # Align every git-pinned clone in .haxelib to its hmm.json ref BEFORE hmm/haxelib
-# touch them.
+# touch them, and neutralize stale dev-link (.dev) paths from imported trees so
+# haxelib does not try to read haxelib.json from a dead runner checkout.
 #
-# Why: `haxelib git <name> <url> <ref>` on an ALREADY-installed library (cached
-# tree, imported export, or warm-cache rerun) goes down haxelib's update() path,
-# which is a bare `git pull` inside the clone (haxelib 4.1.1, bundled with
-# Haxe 4.3.7 -- Vcs.hx). On an imported/cached tree that pull either:
-#   * aborts with "fatal: Need to specify how to reconcile divergent branches"
-#     (git >= 2.27 default when branch and upstream diverged), or
-#   * fast-forwards the clone PAST its pinned commit, silently breaking
-#     reproducibility against the prebuilt ndlls that shipped with the tree.
+# Why the .dev step exists: when an .haxelib tree is imported from another repo's
+# export (e.g. NightmareVision's haxelib-cache-export), each git dep's .dev file
+# carries the ABSOLUTE checkout path of the exporting runner. haxelib treats that
+# as a dev dependency and later tools like `haxelib run lime config` read
+# haxelib.json from that dead path, failing with "Error parsing haxelib.json for
+# lime@dev".
 #
-# Fix, per dependency type:
+# Worse: haxelib's own `haxelib git <name> <url> <ref>` can reintroduce that
+# stale path when it updates an already-installed clone, so the cleanup has to run
+# BOTH before hmm install AND again after it (the caller does the after-pass).
+#
+# Pin alignment (for context, kept from the prior version):
 #   * SHA pins (40 hex chars): fetch + checkout the pin on a dedicated branch
 #     whose upstream points at THIS local clone (branch.<name>.remote = .), so
 #     haxelib's later `git pull` merges an identical ref -- a guaranteed no-op.
@@ -20,6 +23,7 @@
 #
 # Libraries not present in .haxelib are skipped (haxelib clones them fresh).
 # Per-library failures are warnings, never fatal: hmm install still runs after.
+
 set -u
 
 git config --global pull.rebase false 2>/dev/null || true
@@ -27,72 +31,154 @@ git config --global user.email "ci@build.local" 2>/dev/null || true
 git config --global user.name "CI" 2>/dev/null || true
 
 # ------------------------------------------------------------------
-# Clean up dev-link (.dev) files from imported trees BEFORE alignment.
-# `haxelib git <name> <url> <ref>` on an existing clone may have been
-# import"ed" from another repo/export (NV's haxelib-cache-export): the
-# cloned .haxelib tree carries a .dev marker whose value is the ABSOLUTE
-# checkout path of the EXPORTING runner (e.g.
-#   /home/runner/work/NightmareVision-Android-Support/NightmareVision-
-#   Android-Support/.haxelib/lime/git
-# ).
-# haxelib treats that as a "dev dependency" with that path as its
-# development directory, so `haxelib run lime config ...` later reads
-# haxelib.json from that dead path and fails (Error parsing haxelib.json
-# for lime@dev).
-#
-# Fix: rewrite every .dev inside .haxelib/*/git/ whose value contains a
-# path that DOES NOT exist inside this workspace. Replace it with the
-# current workspace root. Same rewrite is done on any .haxelib file
-# whose content carries a stale /home/runner/work/ or absolute path from
-# the export machine.
+# Portable find helper: avoid GNU-only `find -print0`/`read -d ''` because
+# the macOS runner uses BSD find (no -print0) and this may run under dash.
+# haxelib tree paths never contain newlines, so newline-delimited `find`
+# output is safe here.
 # ------------------------------------------------------------------
-if [ -d .haxelib ]; then
-  # Rewrite .dev files whose value points outside the workspace.
-  find .haxelib -type f -name .dev -print0 2>/dev/null | while IFS= read -r -d '' f; do
-    [ -f "$f" ] || continue
-    val=$(cat "$f")
-    case "$val" in
-      ""|*/.haxelib/*|${GITHUB_WORKSPACE}*)
-        # Already points at this workspace (or empty) -- leave it.
-        ;;
-      /*)
-        # Absolute path from the export machine: replace if it does not
-        # live inside the current workspace tree.
-        case "$val" in
-          ${GITHUB_WORKSPACE}*|${GITHUB_WORKSPACE}/*) ;;
-          *)
-            # Rewrite to current workspace + same relative remainder.
-            rel="${val#/home/runner/work/*/}"
-            [ -z "$rel" ] && rel="${val##*/}"
-            newval="${GITHUB_WORKSPACE}/${rel}"
-            # If the target path would still be wrong (no /home/runner/work/ at all),
-            # fall back to the git dep dir itself (the safest known-existing path).
-            if [ ! -d "$(dirname "$newval" 2>/dev/null)" ]; then
-              newval="${GITHUB_WORKSPACE}/.haxelib/$(basename "$(dirname "$f")")/git"
-            fi
-            echo "$newval" > "$f"
-            echo "Fixed dev path in: $f (was: $val)"
-            ;;
-        esac
-        ;;
-      *)
-        # Relative/unknown: leave alone.
+# NOTE: these helpers use POSIX sh (no `local`) so they run under dash/bash/ash.
+
+rewrite_dev_file() {
+  __agp_f="$1"
+  __agp_workspace="${GITHUB_WORKSPACE:-}"
+  __agp_newhome="${2:-}"
+
+  __agp_val=$(head -n1 "$__agp_f" 2>/dev/null || true)
+  [ -n "$__agp_val" ] || return 0
+
+  # Already points at this workspace (or newhome) -- leave it alone.
+  # Only treat as "already clean" when the value STARTS with the known
+  # workspace root (or newhome if provided). A path that merely contains
+  # /.haxelib/ is NOT guaranteed to point at this checkout.
+  case "$__agp_val" in
+    ""|"${__agp_workspace}"|"${__agp_workspace}"/*)
+      return 0
+      ;;
+  esac
+  if [ -n "${__agp_newhome:-}" ]; then
+    case "$__agp_val" in
+      ""|"${__agp_newhome}"|"${__agp_newhome}"/*)
+        return 0
         ;;
     esac
+  fi
+
+  # Absolute path from another machine. Rewrite to the current workspace.
+  case "$__agp_val" in
+    /*)
+      __agp_rewritten=false
+
+      # Prefer: map a /home/runner/work/<repo>/<repo>/<rest> export path to
+      # $GITHUB_WORKSPACE/<rest> (matches NV's export layout). Try the
+      # documented scheduler layout first, then fall back to any two-segment
+      # /home/runner/work/<x>/<y> prefix in case the export came from a
+      # self-hosted or differently-nested runner.
+      __agp_rest="${__agp_val#/home/runner/work/}"
+      if [ "$__agp_rest" != "$__agp_val" ]; then
+        # rest = <repo>/<repo>/<rest...>  (may be more than two segments if the
+        # export came from a differently-nested checkout). Strip exactly two
+        # segments, then use whatever remains.
+        __agp_rest="${__agp_rest#*/}"
+        __agp_rest="${__agp_rest#*/}"
+        __agp_candidate="${__agp_workspace}/${__agp_rest}"
+        if [ -d "$(dirname "$__agp_candidate" 2>/dev/null)" ]; then
+          echo "$__agp_candidate" > "$__agp_f"
+          __agp_rewritten=true
+          echo "Fixed dev path in: $__agp_f (was: $__agp_val)"
+        fi
+      fi
+
+      if [ "$__agp_rewritten" = false ]; then
+        # Fallback: rewrite the /home/runner/work/<x>/<y> prefix to the
+        # workspace root, preserving everything after the second segment.
+        __agp_runnerpath="${__agp_val#/home/runner/work/}"
+        if [ "$__agp_runnerpath" != "$__agp_val" ]; then
+          __agp_runnerpath="${__agp_runnerpath#*/}"
+          __agp_after="${__agp_runnerpath#*/}"
+          # after may be empty if the export path was exactly
+          # /home/runner/work/<x>/<y> with nothing after; in that case default
+          # to the git dep dir itself (known to exist).
+          if [ -n "${__agp_after:-}" ]; then
+            __agp_candidate="${__agp_workspace}/${__agp_after}"
+          else
+            __agp_parentdir=$(dirname "$__agp_f" 2>/dev/null || true)
+            __agp_libname=$(basename "$__agp_parentdir" 2>/dev/null || true)
+            __agp_candidate="${__agp_workspace}/.haxelib/${__agp_libname}/git"
+          fi
+          if [ -d "$(dirname "$__agp_candidate" 2>/dev/null)" ]; then
+            echo "$__agp_candidate" > "$__agp_f"
+            __agp_rewritten=true
+            echo "Fixed dev path in: $__agp_f (was: $__agp_val) via runner fallback"
+          fi
+        fi
+      fi
+
+      # Last resort: if we could not map the NV-style path, point the .dev at
+      # the git dep dir itself. That dir exists whenever the dep is installed,
+      # and it is the least-surprising usable path for haxelib's dev-link
+      # machinery (it still points at a real checkout, just not at the export
+      # machine's absolute path).
+      if [ "$__agp_rewritten" = false ]; then
+        __agp_parentdir=$(dirname "$__agp_f" 2>/dev/null || true)
+        __agp_libname=$(basename "$__agp_parentdir" 2>/dev/null || true)
+        if [ -n "${__agp_newhome:-}" ]; then
+          __agp_candidate="${__agp_newhome}/.haxelib/${__agp_libname}/git"
+        else
+          __agp_candidate="${__agp_workspace}/.haxelib/${__agp_libname}/git"
+        fi
+        if [ -d "$(dirname "$__agp_candidate" 2>/dev/null)" ]; then
+          echo "$__agp_candidate" > "$__agp_f"
+          __agp_rewritten=true
+          echo "Fixed dev path in: $__agp_f (was: $__agp_val) via dep-dir fallback"
+        fi
+      fi
+
+      return 0
+      ;;
+
+    *)
+      # Relative/unknown value -- leave it alone.
+      return 0
+      ;;
+  esac
+}
+
+rewrite_stale_path_in_file() {
+  __agp_f="$1"
+  __agp_workspace="${GITHUB_WORKSPACE:-}"
+
+  [ -n "${__agp_workspace:-}" ] || return 0
+  [ -f "$__agp_f" ] || return 0
+
+  # Only touch files that actually embed a stale scheduler path. We use sed
+  # with a temp file because BSD sed -i often needs an extension and we do not
+  # want to assume one; a failed sed is not fatal, we just keep the original.
+  if grep -qE '/home/runner/work/[^/"]+' "$__agp_f" 2>/dev/null; then
+    __agp_tmp="${__agp_f}.aligntmp.$$"
+    if sed -E "s#/home/runner/work/[^/]+/[^/]+#${__agp_workspace}#g" "$__agp_f" > "$__agp_tmp" 2>/dev/null; then
+      mv "$__agp_tmp" "$__agp_f"
+      echo "Rewrote stale scheduler path in: $__agp_f"
+    else
+      rm -f "$__agp_tmp"
+    fi
+  fi
+}
+
+# ------------------------------------------------------------------
+# Run once now (before pins) to neutralize any imported tree. The caller may
+# also run this function a second time AFTER hmm install if it wants to clean
+# up any .dev paths haxelib reintroduced.
+# ------------------------------------------------------------------
+if [ -n "${GITHUB_WORKSPACE:-}" ] && [ -d .haxelib ]; then
+  for f in $(find .haxelib -type f -name .dev 2>/dev/null); do
+    [ -f "$f" ] || continue
+    rewrite_dev_file "$f"
   done
 
-  # Also rewrite any OTHER file under .haxelib that embeds a stale absolute
-  # path (haxelib.json dev links, registry entries, etc.) pointing at the
-  # exporting machine's checkout. Only touch files whose path is unreachable.
-  find .haxelib -type f \( -name .dev -o -name haxelib.json -o -name .current \) -print0 2>/dev/null \
-    | while IFS= read -r -d '' f; do
-      [ -f "$f" ] || continue
-      if grep -qE '/home/runner/work/[^/"]+' "$f" 2>/dev/null; then
-        # Rewrite /home/runner/work/<repo>/<repo>/<remainder> -> $GITHUB_WORKSPACE/<remainder>
-        sed -i -E "s#/home/runner/work/[^/]+/[^/]+#${GITHUB_WORKSPACE}#g" "$f" 2>/dev/null || true
-        echo "Rewrote stale path in: $f"
-      fi
-    done
+  for f in $(find .haxelib -type f \( -name haxelib.json -o -name .current \) 2>/dev/null); do
+    [ -f "$f" ] || continue
+    rewrite_stale_path_in_file "$f"
+  done
 fi
 
 if [ ! -d .haxelib ]; then
@@ -100,10 +186,12 @@ if [ ! -d .haxelib ]; then
   exit 0
 fi
 
+# ------------------------------------------------------------------
+# Git-pinned deps only; haxelib-release deps have nothing to align.
+# ------------------------------------------------------------------
 command -v jq >/dev/null || { echo "jq not found -- skipping pin alignment."; exit 0; }
 
-# Git-pinned deps only; haxelib-release deps have nothing to align.
-jq -r '.dependencies[] | select(.type=="git") | "\(.name)|\(.ref // "")"' hmm.json |
+jq -r '.dependencies[] | select(.type=="git") | "\(.name)|\(.ref)"' hmm.json |
 while IFS='|' read -r lib ref; do
   [ -n "$ref" ] || continue
   dir=".haxelib/$lib/git"
