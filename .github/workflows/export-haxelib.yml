@@ -51,6 +51,10 @@ jobs:
       - name: Install Libraries
         if: steps.haxelibs-cache.outputs.cache-hit != 'true'
         run: |
+          # Align any pre-existing git clones to their hmm.json refs first:
+          # haxelib's update path on an existing clone is a bare `git pull`,
+          # which aborts on diverged branches (git >= 2.27) or drifts the pin.
+          sh ./scripts/align_haxelib_pins.sh
           haxelib install hmm --quiet
           haxelib run hmm install --quiet
 

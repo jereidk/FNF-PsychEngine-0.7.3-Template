@@ -198,11 +198,18 @@ jobs:
       # ALWAYS runs: even a successfully imported tree only covers the shared
       # packages (lime/openfl/flixel/etc. -- pins now identical to NV's), while
       # hmm still has to add the Psych-only deps (SScript, linc_luajit,
-      # hxCodec, tjson, flxanimate, flixel-tools) and keep everything aligned
-      # with hmm.json. With SHA pins matching the imported commits, hmm sees
-      # those git deps as up to date and leaves the prebuilt clones in place.
+      # hxCodec, tjson, flxanimate, flixel-tools).
+      #
+      # haxelib's `git <name> <url> <ref>` on an ALREADY-installed lib runs its
+      # update() path -- a bare `git pull` (haxelib 4.1.1, Vcs.hx). On imported
+      # or cached trees that pull aborts with "Need to specify how to reconcile
+      # divergent branches" (git >= 2.27) or fast-forwards the clone PAST its
+      # pin. scripts/align_haxelib_pins.sh checks out every git dep exactly at
+      # its hmm.json ref first, with a local upstream for SHA pins so the pull
+      # is a no-op and branch pins pull as clean fast-forwards.
       - name: Install Libraries
         run: |
+          sh ./scripts/align_haxelib_pins.sh
           haxelib install hmm --quiet
           haxelib run hmm install --quiet
 
