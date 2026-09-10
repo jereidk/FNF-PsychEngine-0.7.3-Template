@@ -3,6 +3,25 @@ name: Main
 on:
   workflow_dispatch:
     inputs:
+      build_mode:
+        description: 'Build mode'
+        type: choice
+        options:
+          - debug
+          - release
+        default: debug
+      publish_release:
+        description: 'Publish to GitHub Releases (off = artifacts only)'
+        type: boolean
+        default: false
+      release_tag:
+        description: 'Release tag (only used when publishing)'
+        type: string
+        default: '0.7.3'
+      release_name:
+        description: 'Release title (only used when publishing)'
+        type: string
+        default: 'Template'
       build_all:
         description: 'Build ALL platforms (overrides every toggle below)'
         type: boolean
@@ -30,6 +49,9 @@ on:
 
 # permissions: write-all
 
+env:
+  PROJECT_NAME: PsychEngine
+
 jobs:
   Build:
     name: ${{ matrix.name }}
@@ -40,54 +62,170 @@ jobs:
         include:
           - name: Windows x64
             os: windows-2022
-            buildArgs: windows
+            argsDebug: windows
+            argsRelease: "windows -final -X64 -D HXCPP_X64 -D 64bits"
             artifactName: Windows x64
             artifactPath: export\release\windows\bin\*
             enabled: ${{ inputs.build_windows }}
           - name: Windows x32
             os: windows-2022
-            buildArgs: "windows -32 -D HXCPP_M32 -D 32bits"
+            argsDebug: "windows -32 -D HXCPP_M32 -D 32bits"
+            argsRelease: "windows -final -X32 -D HXCPP_X32 -D 32bits"
             artifactName: Windows x32
             artifactPath: export\32bit\windows\bin\*
             enabled: ${{ inputs.build_windows }}
           - name: Linux
             os: ubuntu-22.04
-            buildArgs: linux
+            argsDebug: linux
+            argsRelease: "linux -final"
             artifactName: Linux
             artifactPath: export/release/linux/bin/*
             enabled: ${{ inputs.build_linux }}
           - name: MacOS
             os: macos-15
-            buildArgs: mac
+            argsDebug: mac
+            argsRelease: "mac -final"
             artifactName: MacOS
             artifactPath: export/release/macos/bin/*
             enabled: ${{ inputs.build_macos }}
           - name: Android x64
             os: macos-15
-            buildArgs: "android -ONLY_ARM64"
+            argsDebug: "android -ONLY_ARM64"
+            argsRelease: "android -final -ONLY_ARM64"
             artifactName: Android x64
             artifactPath: "export/release/android/bin/app/build/outputs/apk/release/*.apk"
             enabled: ${{ inputs.build_android }}
           - name: Android x32
             os: macos-15
-            buildArgs: "android -ONLY_ARMV7"
+            argsDebug: "android -ONLY_ARMV7"
+            argsRelease: "android -final -ONLY_ARMV7"
             artifactName: Android x32
             artifactPath: "export/release/android/bin/app/build/outputs/apk/release/*.apk"
             enabled: ${{ inputs.build_android }}
           - name: iOS
             os: macos-15
-            buildArgs: "ios -nosign"
-            artifactName: IOS
+            argsDebug: "ios -nosign"
+            argsRelease: "ios -final -nosign"
+            artifactName: iOS
             artifactPath: "export/release/ios/build/Release-iphoneos/*.ipa"
             enabled: ${{ inputs.build_ios }}
     uses: ./.github/workflows/build.yml
     with:
         name: ${{ matrix.name }}
         os: ${{ matrix.os }}
-        buildArgs: ${{ matrix.buildArgs }}
+        # Debug keeps plain platform args; release adds -final (+ arch flags).
+        buildArgs: ${{ inputs.build_mode == 'release' && matrix.argsRelease || matrix.argsDebug }}
         artifactName: ${{ matrix.artifactName }}
         artifactPath: ${{ matrix.artifactPath }}
         # Platform selector: matrix context is unavailable in a job-level `if`
         # for reusable-workflow calls, so the flag goes through `with:` instead
         # and build.yml's job skips itself when false.
         enabled: ${{ inputs.build_all || matrix.enabled }}
+
+  Releaser:
+    name: Package & Publish Release
+    needs: [build]
+    # Artifacts-only runs skip packaging entirely; a fully-skipped build
+    # (every toggle off) skips this job automatically via `needs`.
+    if: inputs.publish_release
+    runs-on: ubuntu-latest
+    permissions: write-all
+    steps:
+      # NOTE: every platform gate must honor build_all too, since the matrix
+      # legs may have been enabled by it while the raw toggles are all false.
+      - name: Download Windows x64 Build
+        if: ${{ inputs.build_all || inputs.build_windows }}
+        uses: actions/download-artifact@v4
+        with:
+          name: Windows x64
+          path: /home/runner/Windows-x64
+
+      - name: Zip Windows x64 Build For Release
+        if: ${{ inputs.build_all || inputs.build_windows }}
+        run: |
+          cd /home/runner/Windows-x64
+          zip -r "/home/runner/${{ env.PROJECT_NAME }}-Windows-x64.zip" .
+
+      - name: Download Windows x32 Build
+        if: ${{ inputs.build_all || inputs.build_windows }}
+        uses: actions/download-artifact@v4
+        with:
+          name: Windows x32
+          path: /home/runner/Windows-x32
+
+      - name: Zip Windows x32 Build For Release
+        if: ${{ inputs.build_all || inputs.build_windows }}
+        run: |
+          cd /home/runner/Windows-x32
+          zip -r "/home/runner/${{ env.PROJECT_NAME }}-Windows-x32.zip" .
+
+      - name: Download Linux Build
+        if: ${{ inputs.build_all || inputs.build_linux }}
+        uses: actions/download-artifact@v4
+        with:
+          name: Linux
+          path: /home/runner/Linux
+
+      - name: Tar Linux Build For Release
+        if: ${{ inputs.build_all || inputs.build_linux }}
+        run: |
+          cd /home/runner/Linux
+          tar czf "/home/runner/${{ env.PROJECT_NAME }}-Linux.tar" .
+
+      - name: Download MacOS Build
+        if: ${{ inputs.build_all || inputs.build_macos }}
+        uses: actions/download-artifact@v4
+        with:
+          name: MacOS
+          path: /home/runner/MacOS
+
+      - name: Tar MacOS Build For Release
+        if: ${{ inputs.build_all || inputs.build_macos }}
+        run: |
+          cd /home/runner/MacOS
+          tar czf "/home/runner/${{ env.PROJECT_NAME }}-MacOS.tar" .
+
+      - name: Download Android x64 Build
+        if: ${{ inputs.build_all || inputs.build_android }}
+        uses: actions/download-artifact@v4
+        with:
+          name: Android x64
+          path: /home/runner
+
+      - name: Move Android x64 File
+        if: ${{ inputs.build_all || inputs.build_android }}
+        run: mv /home/runner/${{ env.PROJECT_NAME }}-release.apk /home/runner/${{ env.PROJECT_NAME }}-Android-x64.apk
+
+      - name: Download Android x32 Build
+        if: ${{ inputs.build_all || inputs.build_android }}
+        uses: actions/download-artifact@v4
+        with:
+          name: Android x32
+          path: /home/runner
+
+      - name: Move Android x32 File
+        if: ${{ inputs.build_all || inputs.build_android }}
+        run: mv /home/runner/${{ env.PROJECT_NAME }}-release.apk /home/runner/${{ env.PROJECT_NAME }}-Android-x32.apk
+
+      - name: Download iOS Build
+        if: ${{ inputs.build_all || inputs.build_ios }}
+        uses: actions/download-artifact@v4
+        with:
+          name: iOS
+          path: /home/runner/iOS-artifact
+
+      - name: Move iOS File
+        if: ${{ inputs.build_all || inputs.build_ios }}
+        run: mv /home/runner/iOS-artifact/${{ env.PROJECT_NAME }}.ipa /home/runner/${{ env.PROJECT_NAME }}-iOS.ipa
+
+      # Tag is auto-created by the action when it does not exist yet.
+      - name: Publish The Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ inputs.release_name }}
+          tag_name: ${{ inputs.release_tag }}
+          files: |
+            /home/runner/*.apk
+            /home/runner/*.ipa
+            /home/runner/*.tar
+            /home/runner/*.zip

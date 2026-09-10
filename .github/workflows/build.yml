@@ -39,8 +39,8 @@ jobs:
     name: Build
     runs-on: ${{ inputs.os }}
     # Platform selector support: a disabled leg never starts (and never
-    # consumes runner minutes). Kept inside build.yml so release.yml and
-    # release-action.yml need no changes.
+    # consumes runner minutes). Kept here so any caller (e.g. Main's
+    # platform selector) works without per-caller conditionals.
     if: ${{ inputs.enabled != false }}
     # Explicit grant: under restricted default token policies the actions:write
     # permission is what makes cache saves and the stale-cache prune actually
