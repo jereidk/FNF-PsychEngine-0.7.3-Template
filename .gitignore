@@ -1,0 +1,16 @@
+# Project-local dependency clones (hmm.json git deps live in libs/)
+libs/
+
+# Haxelib / hxcpp build state
+.haxelib/
+.hxcpp_cache/
+export/
+dump/
+
+# IDE
+.vscode/
+*.code-workspace
+
+# OS noise
+.DS_Store
+Thumbs.db

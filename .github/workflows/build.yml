@@ -20,7 +20,9 @@ on:
         type: string
 
 env:
-  HAXE_VERSION: 4.3.2
+  # 4.3.7 is the proven pin for this Lime/Haxe/Flixel/Android stack
+  # (same one NightmareVision-Android-Support / Indie-Cross-Public CI uses).
+  HAXE_VERSION: 4.3.7
   PROJECT_NAME: PsychEngine
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
 
@@ -28,6 +30,13 @@ jobs:
   build:
     name: Build
     runs-on: ${{ inputs.os }}
+    # Explicit grant: under restricted default token policies the actions:write
+    # permission is what makes cache saves and the stale-cache prune actually
+    # work (otherwise they fail SILENTLY -- see Indie-Cross-Public's CI.yml,
+    # which needed this for the exact same reason).
+    permissions:
+      contents: read
+      actions: write
     steps:
       - name: Checkout
         uses: actions/checkout@main
@@ -36,6 +45,31 @@ jobs:
         uses: krdlab/setup-haxe@master
         with:
           haxe-version: ${{ env.HAXE_VERSION }}
+
+      # Restore/save are separate actions (actions/cache@v4's save-always
+      # input is deprecated). Save steps sit at the end of the job, gated on
+      # a completeness marker so a half-installed tree can never poison the
+      # key (pattern ported from Indie-Cross-Public's CI.yml).
+      - name: Cache Haxe libraries
+        id: haxelibs-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/haxelib
+            .haxelib
+          key: haxelibs-${{ runner.os }}-v1-${{ hashFiles('hmm.json') }}
+
+      # Incremental C++ object cache for the transpiled Haxe source, keyed on
+      # the source itself: a run that only touches .hx files recompiles only
+      # what changed instead of every generated .cpp from scratch.
+      - name: Cache hxcpp compile cache
+        id: hxcpp-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .hxcpp_cache
+          key: hxcpp-${{ runner.os }}-${{ inputs.name }}-v1-${{ hashFiles('source/**/*.hx', 'Project.xml', 'hmm.json') }}
+          restore-keys: |
+            hxcpp-${{ runner.os }}-${{ inputs.name }}-v1-
 
       - name: Update APT
         if: inputs.name == 'Linux'
@@ -76,6 +110,10 @@ jobs:
           haxelib run lime config ANDROID_SETUP true
 
       - name: Compile
+        env:
+          # Workspace-relative (not ~) so it resolves identically on
+          # Windows/macOS/Linux runners; must match the cache path above.
+          HXCPP_COMPILE_CACHE: ${{ github.workspace }}/.hxcpp_cache
         run: haxelib run lime build ${{ inputs.buildArgs }}
 
       - name: Make IPA
@@ -92,3 +130,58 @@ jobs:
           name: ${{ inputs.artifactName }}
           path: ${{ inputs.artifactPath }}
           if-no-files-found: error
+
+      # lime.ndll/liblime *.so are the last thing the install chain produces;
+      # their presence means the tree is usable. Saving on failure WITHOUT
+      # this guard is how Indie-Cross-Public's haxelibs cache got poisoned:
+      # a half-built tree published under the key every later run restores.
+      - name: Check Haxe library tree is complete
+        id: libcheck
+        if: always()
+        shell: bash
+        run: |
+          if compgen -G ".haxelib/lime/git/ndll/*/lime.ndll" > /dev/null \
+            || compgen -G ".haxelib/lime/git/ndll/Android/*.so" > /dev/null; then
+            echo "complete=true" >> "$GITHUB_OUTPUT"
+            echo "Library tree looks complete -- safe to cache."
+          else
+            echo "complete=false" >> "$GITHUB_OUTPUT"
+            echo "Library tree is INCOMPLETE -- refusing to save the haxelibs cache."
+          fi
+
+      - name: Save Haxe libraries cache
+        if: always() && steps.libcheck.outputs.complete == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/haxelib
+            .haxelib
+          key: haxelibs-${{ runner.os }}-v1-${{ hashFiles('hmm.json') }}
+
+      # Every source change mints a brand-new hxcpp cache key; old generations
+      # are never replaced, only added to, until GitHub starts evicting other
+      # caches. This keeps only the newest generation under the prefix.
+      - name: Prune stale hxcpp caches
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          PREFIX="hxcpp-${{ runner.os }}-${{ inputs.name }}-v1-"
+          gh api "repos/${{ github.repository }}/actions/caches" --paginate \
+            --jq ".actions_caches[] | select(.key | startswith(\"$PREFIX\")) | \"\(.id) \(.created_at)\"" \
+            > /tmp/caches.txt || exit 0
+          # sed '$d', not `head -n -1`: BSD head (macOS runners) rejects
+          # negative line counts, and prune must also work on the Mac/iOS jobs.
+          sort -t' ' -k2,2 /tmp/caches.txt | sed '$d' | awk '{print $1}' | while read -r id; do
+            echo "Deleting stale cache $id"
+            gh api -X DELETE "repos/${{ github.repository }}/actions/caches/$id" || true
+          done
+
+      - name: Save hxcpp compile cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .hxcpp_cache
+          key: hxcpp-${{ runner.os }}-${{ inputs.name }}-v1-${{ hashFiles('source/**/*.hx', 'Project.xml', 'hmm.json') }}
