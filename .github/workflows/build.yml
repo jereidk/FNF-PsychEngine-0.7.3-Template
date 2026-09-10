@@ -33,6 +33,8 @@ env:
   HAXE_VERSION: 4.3.7
   PROJECT_NAME: PsychEngine
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+  # Release tag (on this repo) holding the compiled haxelib tree export.
+  EXPORT_TAG: haxelib-cache-export
 
 jobs:
   build:
@@ -100,7 +102,87 @@ jobs:
         with:
           xcode-version: '16.4'
 
+      # ------------------------------------------------------------------
+      # Import tier (NightmareVision pattern, self-hosted): a previously
+      # exported compiled haxelib tree -- published as a release by
+      # export-haxelib.yml on THIS repo -- is imported on cold caches, so
+      # lime/hxcpp/openfl/flixel are not installed+compiled from scratch.
+      # NV's own export cannot be consumed here: it pins FunkinCrew forks
+      # while this template pins AlafandyPorting/psych forks, so hmm would
+      # replace every imported package anyway.
+      # ------------------------------------------------------------------
+      - name: Resolve haxelib export release
+        id: export-resolve
+        if: steps.haxelibs-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          PUBLISHED_AT=$(gh release view "$EXPORT_TAG" --repo "${{ github.repository }}" --json publishedAt --jq '.publishedAt' 2>/dev/null)
+          if [ -z "$PUBLISHED_AT" ]; then
+            echo "No '$EXPORT_TAG' release yet -- run export-haxelib.yml once after pins change."
+          else
+            echo "Found export release published $PUBLISHED_AT."
+          fi
+          # Timestamp as the version marker: slashes/colons out for a legal key.
+          echo "version=$(echo "$PUBLISHED_AT" | tr -c 'A-Za-z0-9._-' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache downloaded export tarballs
+        id: export-download-cache
+        if: steps.haxelibs-cache.outputs.cache-hit != 'true' && steps.export-resolve.outputs.version != ''
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/export-import
+          key: export-dl-${{ runner.os }}-${{ steps.export-resolve.outputs.version }}
+
+      - name: Import exported haxelib tree
+        id: import-export
+        if: steps.haxelibs-cache.outputs.cache-hit != 'true' && steps.export-resolve.outputs.version != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -x
+          echo "imported=false" >> "$GITHUB_OUTPUT"
+          if [ "${{ steps.export-download-cache.outputs.cache-hit }}" != 'true' ]; then
+            mkdir -p /tmp/export-import
+            gh release download "$EXPORT_TAG" --repo "${{ github.repository }}" --dir /tmp/export-import --clobber
+          else
+            echo "Reusing previously-downloaded export ($EXPORT_TAG)."
+          fi
+          # Assets are 1900MB parts (release assets cap at 2GB); reassemble.
+          # Two checks, catching different failures: the set of parts present
+          # must EXACTLY match the manifest (an extra stale part would slip
+          # into the cat and corrupt the reassembly), then the checksums.
+          ( cd /tmp/export-import \
+            && ls ./*.part.* 2>/dev/null | sed 's#^\./##' | sort > /tmp/export-present.txt \
+            && awk '{print $NF}' SHA256SUMS | sed 's#^\./##' | sort > /tmp/export-manifest.txt \
+            && diff -u /tmp/export-manifest.txt /tmp/export-present.txt ) \
+            || { echo "Downloaded export does not match its manifest -- refusing to import."; exit 1; }
+          ( cd /tmp/export-import && sha256sum -c SHA256SUMS ) \
+            || { echo "Export checksums do not match -- refusing a corrupt tree."; exit 1; }
+          cat /tmp/export-import/haxelib-root.tar.gz.part.* > /tmp/export-import/haxelib-root.tar.gz
+          cat /tmp/export-import/haxelib-project.tar.gz.part.* > /tmp/export-import/haxelib-project.tar.gz
+          tar -xzf /tmp/export-import/haxelib-root.tar.gz -C "$HOME"
+          tar -xzf /tmp/export-import/haxelib-project.tar.gz -C .
+          rm -f /tmp/export-import/haxelib-root.tar.gz /tmp/export-import/haxelib-project.tar.gz
+          # Dev-link registry entries store the ABSOLUTE checkout path of the
+          # exporting runner; rewrite them to this workspace or haxelib can't
+          # even parse the packages' haxelib.json.
+          EXPORT_PREFIX="/home/runner/work/${{ github.event.repository.name }}/${{ github.event.repository.name }}"
+          grep -rlFI "$EXPORT_PREFIX" ~/haxelib .haxelib 2>/dev/null | while IFS= read -r f; do
+            sed -i "s#${EXPORT_PREFIX}#${GITHUB_WORKSPACE}#g" "$f"
+            echo "Rewrote stale path in: $f"
+          done
+          haxelib setup ~/haxelib
+          echo "imported=true" >> "$GITHUB_OUTPUT"
+          echo "Imported exported haxelib tree ($EXPORT_TAG)."
+
+      # Skipped when the import succeeded: its packages are already in place
+      # (and hmm would just re-clone them). Runs otherwise.
       - name: Install Libraries
+        if: steps.haxelibs-cache.outputs.cache-hit != 'true' && steps.import-export.outputs.imported != 'true'
         run: |
           haxelib install hmm --quiet
           haxelib run hmm install --quiet

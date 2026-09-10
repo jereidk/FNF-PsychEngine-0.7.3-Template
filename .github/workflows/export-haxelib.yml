@@ -1,0 +1,120 @@
+name: Export haxelib cache
+
+# Publishes this repo's compiled haxelib tree (~/haxelib + .haxelib) as a
+# release, so build.yml's jobs can import it on cold caches instead of
+# installing lime/hxcpp/openfl/flixel from scratch. This is the
+# NightmareVision-Android-Support pattern, self-hosted: NV's own export is
+# pinned to FunkinCrew forks and is INCOMPATIBLE with this template's
+# AlafandyPorting/psych forks (hmm install would just replace all of it), so
+# it cannot be consumed here directly.
+#
+# Run this ONCE after the pins in hmm.json change (or after a fresh compile),
+# then every cold build imports the tree for free.
+
+on:
+  workflow_dispatch:
+
+env:
+  HAXE_VERSION: 4.3.7
+  PROJECT_NAME: PsychEngine
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+  EXPORT_TAG: haxelib-cache-export
+
+jobs:
+  export:
+    name: Compile & export (Android x64)
+    runs-on: macos-15
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@main
+
+      - name: Setup Haxe
+        uses: krdlab/setup-haxe@master
+        with:
+          haxe-version: ${{ env.HAXE_VERSION }}
+
+      - name: Cache Haxe libraries
+        id: haxelibs-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/haxelib
+            .haxelib
+          key: haxelibs-${{ runner.os }}-v1-${{ hashFiles('hmm.json') }}
+
+      - name: Install Libraries
+        if: steps.haxelibs-cache.outputs.cache-hit != 'true'
+        run: |
+          haxelib install hmm --quiet
+          haxelib run hmm install --quiet
+
+      - name: Configure Android x64
+        run: |
+          haxelib run lime config ANDROID_SDK $ANDROID_HOME
+          haxelib run lime config ANDROID_NDK_ROOT $ANDROID_NDK_LATEST_HOME
+          haxelib run lime config JAVA_HOME $JAVA_HOME_17_arm64
+          haxelib run lime config ANDROID_SETUP true
+
+      # Compiling Android is what produces the native .so files in the tree;
+      # those binaries are the whole point of the export.
+      - name: Compile Android x64
+        run: haxelib run lime build android -ONLY_ARM64
+
+      - name: Check Haxe library tree is complete
+        id: libcheck
+        if: always()
+        shell: bash
+        run: |
+          if compgen -G ".haxelib/lime/git/ndll/*/lime.ndll" > /dev/null \
+            || compgen -G ".haxelib/lime/git/ndll/Android/*.so" > /dev/null; then
+            echo "complete=true" >> "$GITHUB_OUTPUT"
+            echo "Library tree looks complete -- safe to export."
+          else
+            echo "complete=false" >> "$GITHUB_OUTPUT"
+            echo "Library tree is INCOMPLETE -- refusing to export it."
+            exit 1
+          fi
+
+      # Two tarballs (same layout NV exports): "root" = global haxelib repo +
+      # home .haxelib marker, "project" = this checkout's .haxelib with all
+      # deps (git clones included) and the compiled ndll/.so artifacts.
+      - name: Pack haxelib trees
+        shell: bash
+        run: |
+          mkdir -p /tmp/export
+          cd "$HOME"
+          # Home .haxelib marker may not exist on a fresh runner; haxelib's
+          # global repo is what matters. Consumer runs `haxelib setup` anyway.
+          ROOT_ARGS=(haxelib)
+          [ -e .haxelib ] && ROOT_ARGS+=(.haxelib)
+          tar czf /tmp/export/haxelib-root.tar.gz "${ROOT_ARGS[@]}"
+          tar czf /tmp/export/haxelib-project.tar.gz -C "$GITHUB_WORKSPACE" .haxelib
+          cd /tmp/export
+          # Release assets cap at 2GB; split at 1900MB like NV does.
+          split -b 1900M -d -a 3 haxelib-root.tar.gz haxelib-root.tar.gz.part.
+          split -b 1900M -d -a 3 haxelib-project.tar.gz haxelib-project.tar.gz.part.
+          rm -f haxelib-root.tar.gz haxelib-project.tar.gz
+          sha256sum ./*.part.* > SHA256SUMS
+          ls -la
+
+      # Delete-then-recreate: softprops would only add/replace same-named
+      # assets, so a previous export with MORE parts than this one would
+      # leave stale extras behind -- and the consumer's manifest diff
+      # refuses imports with extra parts, deadlocking on the old layout.
+      - name: Delete previous export release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete "$EXPORT_TAG" --repo "${{ github.repository }}" --cleanup-tag --yes || true
+
+      - name: Publish export release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: haxelib/Lime cache export
+          tag_name: ${{ env.EXPORT_TAG }}
+          make_latest: false
+          files: |
+            /tmp/export/*.part.*
+            /tmp/export/SHA256SUMS
