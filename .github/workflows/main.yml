@@ -1,12 +1,43 @@
 name: Main
-on: workflow_dispatch
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_all:
+        description: 'Build ALL platforms (overrides every toggle below)'
+        type: boolean
+        default: false
+      build_windows:
+        description: 'Windows (x64 + x32)'
+        type: boolean
+        default: true
+      build_linux:
+        description: 'Linux'
+        type: boolean
+        default: false
+      build_macos:
+        description: 'macOS'
+        type: boolean
+        default: false
+      build_android:
+        description: 'Android (x64 + x32)'
+        type: boolean
+        default: false
+      build_ios:
+        description: 'iOS'
+        type: boolean
+        default: false
 
 # permissions: write-all
 
 jobs:
   Build:
     name: ${{ matrix.name }}
+    # Skips every matrix leg whose platform toggle is off; build_all turns everything on
+    if: ${{ inputs.build_all || matrix.enabled }}
     strategy:
+      # Selected platforms build independently: one failure must not cancel the rest
+      fail-fast: false
       matrix:
         include:
           - name: Windows x64
@@ -14,36 +45,43 @@ jobs:
             buildArgs: windows
             artifactName: Windows x64
             artifactPath: export\release\windows\bin\*
+            enabled: ${{ inputs.build_windows }}
           - name: Windows x32
             os: windows-2022
             buildArgs: "windows -32 -D HXCPP_M32 -D 32bits"
             artifactName: Windows x32
             artifactPath: export\32bit\windows\bin\*
+            enabled: ${{ inputs.build_windows }}
           - name: Linux
             os: ubuntu-22.04
             buildArgs: linux
             artifactName: Linux
             artifactPath: export/release/linux/bin/*
+            enabled: ${{ inputs.build_linux }}
           - name: MacOS
             os: macos-15
             buildArgs: mac
             artifactName: MacOS
             artifactPath: export/release/macos/bin/*
+            enabled: ${{ inputs.build_macos }}
           - name: Android x64
             os: macos-15
             buildArgs: "android -ONLY_ARM64"
             artifactName: Android x64
             artifactPath: "export/release/android/bin/app/build/outputs/apk/release/*.apk"
+            enabled: ${{ inputs.build_android }}
           - name: Android x32
             os: macos-15
             buildArgs: "android -ONLY_ARMV7"
             artifactName: Android x32
             artifactPath: "export/release/android/bin/app/build/outputs/apk/release/*.apk"
+            enabled: ${{ inputs.build_android }}
           - name: iOS
             os: macos-15
             buildArgs: "ios -nosign"
             artifactName: IOS
             artifactPath: "export/release/ios/build/Release-iphoneos/*.ipa"
+            enabled: ${{ inputs.build_ios }}
     uses: ./.github/workflows/build.yml
     with:
         name: ${{ matrix.name }}
