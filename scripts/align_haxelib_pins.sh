@@ -26,6 +26,75 @@ git config --global pull.rebase false 2>/dev/null || true
 git config --global user.email "ci@build.local" 2>/dev/null || true
 git config --global user.name "CI" 2>/dev/null || true
 
+# ------------------------------------------------------------------
+# Clean up dev-link (.dev) files from imported trees BEFORE alignment.
+# `haxelib git <name> <url> <ref>` on an existing clone may have been
+# import"ed" from another repo/export (NV's haxelib-cache-export): the
+# cloned .haxelib tree carries a .dev marker whose value is the ABSOLUTE
+# checkout path of the EXPORTING runner (e.g.
+#   /home/runner/work/NightmareVision-Android-Support/NightmareVision-
+#   Android-Support/.haxelib/lime/git
+# ).
+# haxelib treats that as a "dev dependency" with that path as its
+# development directory, so `haxelib run lime config ...` later reads
+# haxelib.json from that dead path and fails (Error parsing haxelib.json
+# for lime@dev).
+#
+# Fix: rewrite every .dev inside .haxelib/*/git/ whose value contains a
+# path that DOES NOT exist inside this workspace. Replace it with the
+# current workspace root. Same rewrite is done on any .haxelib file
+# whose content carries a stale /home/runner/work/ or absolute path from
+# the export machine.
+# ------------------------------------------------------------------
+if [ -d .haxelib ]; then
+  # Rewrite .dev files whose value points outside the workspace.
+  find .haxelib -type f -name .dev -print0 2>/dev/null | while IFS= read -r -d '' f; do
+    [ -f "$f" ] || continue
+    val=$(cat "$f")
+    case "$val" in
+      ""|*/.haxelib/*|${GITHUB_WORKSPACE}*)
+        # Already points at this workspace (or empty) -- leave it.
+        ;;
+      /*)
+        # Absolute path from the export machine: replace if it does not
+        # live inside the current workspace tree.
+        case "$val" in
+          ${GITHUB_WORKSPACE}*|${GITHUB_WORKSPACE}/*) ;;
+          *)
+            # Rewrite to current workspace + same relative remainder.
+            rel="${val#/home/runner/work/*/}"
+            [ -z "$rel" ] && rel="${val##*/}"
+            newval="${GITHUB_WORKSPACE}/${rel}"
+            # If the target path would still be wrong (no /home/runner/work/ at all),
+            # fall back to the git dep dir itself (the safest known-existing path).
+            if [ ! -d "$(dirname "$newval" 2>/dev/null)" ]; then
+              newval="${GITHUB_WORKSPACE}/.haxelib/$(basename "$(dirname "$f")")/git"
+            fi
+            echo "$newval" > "$f"
+            echo "Fixed dev path in: $f (was: $val)"
+            ;;
+        esac
+        ;;
+      *)
+        # Relative/unknown: leave alone.
+        ;;
+    esac
+  done
+
+  # Also rewrite any OTHER file under .haxelib that embeds a stale absolute
+  # path (haxelib.json dev links, registry entries, etc.) pointing at the
+  # exporting machine's checkout. Only touch files whose path is unreachable.
+  find .haxelib -type f \( -name .dev -o -name haxelib.json -o -name .current \) -print0 2>/dev/null \
+    | while IFS= read -r -d '' f; do
+      [ -f "$f" ] || continue
+      if grep -qE '/home/runner/work/[^/"]+' "$f" 2>/dev/null; then
+        # Rewrite /home/runner/work/<repo>/<repo>/<remainder> -> $GITHUB_WORKSPACE/<remainder>
+        sed -i -E "s#/home/runner/work/[^/]+/[^/]+#${GITHUB_WORKSPACE}#g" "$f" 2>/dev/null || true
+        echo "Rewrote stale path in: $f"
+      fi
+    done
+fi
+
 if [ ! -d .haxelib ]; then
   echo "No .haxelib tree yet -- nothing to align (haxelib will clone from scratch)."
   exit 0
