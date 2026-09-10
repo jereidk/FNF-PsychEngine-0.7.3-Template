@@ -10,7 +10,7 @@ on:
       build_windows:
         description: 'Windows (x64 + x32)'
         type: boolean
-        default: true
+        default: false
       build_linux:
         description: 'Linux'
         type: boolean
@@ -22,7 +22,7 @@ on:
       build_android:
         description: 'Android (x64 + x32)'
         type: boolean
-        default: false
+        default: true
       build_ios:
         description: 'iOS'
         type: boolean
