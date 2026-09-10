@@ -7,6 +7,12 @@ import backend.PsychCamera;
 
 class MusicBeatState extends FlxUIState
 {
+	public static var instance:MusicBeatState;
+
+	public var variables:Map<String, Dynamic> = new Map<String, Dynamic>();
+	public static function getVariables()
+		return instance.variables;
+
 	private var curSection:Int = 0;
 	private var stepsToDo:Int = 0;
 
@@ -25,6 +31,12 @@ class MusicBeatState extends FlxUIState
 	public var touchPadCam:FlxCamera;
 	public var mobileControls:IMobileControls;
 	public var mobileControlsCam:FlxCamera;
+
+	public function new()
+	{
+		super();
+		instance = this;
+	}
 
 	public function addTouchPad(DPad:String, Action:String)
 	{

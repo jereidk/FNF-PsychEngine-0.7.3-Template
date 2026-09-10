@@ -250,6 +250,64 @@ class HScript extends SScript
 			if(parentLua != null) funk.addLocalCallback(name, func);
 			else FunkinLua.luaTrace('createCallback ($name): 3rd argument is null', false, false, FlxColor.RED);
 		});
+
+		// Lua <-> HScript bridge helpers (mirror of callScript/callHScript on the Lua side)
+		function findLuaScript(luaFile:String):FunkinLua
+		{
+			if(PlayState.instance == null) return null;
+			if(parentLua != null && (luaFile == null || luaFile.length == 0)) return parentLua;
+
+			var targetFile:String = (luaFile == null) ? '' : luaFile;
+			if(targetFile.length < 4 || targetFile.substr(targetFile.length - 4) != '.lua') targetFile += '.lua';
+			for (luaInstance in PlayState.instance.luaArray)
+				if(luaInstance.scriptName == targetFile || luaInstance.scriptName == luaFile)
+					return luaInstance;
+			return null;
+		}
+
+		set('callLua', function(luaFile:String, funcName:String, ?args:Array<Dynamic> = null):Dynamic {
+			var script:FunkinLua = findLuaScript(luaFile);
+			if(script == null)
+			{
+				FunkinLua.luaTrace('callLua ($luaFile): Script isn\'t running!', false, false, FlxColor.RED);
+				return null;
+			}
+			if(args == null) args = [];
+			return script.call(funcName, args);
+		});
+
+		set('callAllLuas', function(funcName:String, ?args:Array<Dynamic> = null):Dynamic {
+			if(PlayState.instance == null) return null;
+			if(args == null) args = [];
+			var ret:Dynamic = null;
+			for (luaInstance in PlayState.instance.luaArray)
+			{
+				var val:Dynamic = luaInstance.call(funcName, args);
+				if(val != null && val != LuaUtils.Function_Continue) ret = val;
+			}
+			return ret;
+		});
+
+		set('getLuaLocal', function(luaFile:String, varName:String):Dynamic {
+			var script:FunkinLua = findLuaScript(luaFile);
+			if(script == null)
+			{
+				FunkinLua.luaTrace('getLuaLocal ($luaFile): Script isn\'t running!', false, false, FlxColor.RED);
+				return null;
+			}
+			return script.localVariables.get(varName);
+		});
+
+		set('setLuaLocal', function(luaFile:String, varName:String, value:Dynamic):Dynamic {
+			var script:FunkinLua = findLuaScript(luaFile);
+			if(script == null)
+			{
+				FunkinLua.luaTrace('setLuaLocal ($luaFile): Script isn\'t running!', false, false, FlxColor.RED);
+				return null;
+			}
+			script.localVariables.set(varName, value);
+			return value;
+		});
 		#end
 
 		set('addHaxeLibrary', function(libName:String, ?libPackage:String = '') {

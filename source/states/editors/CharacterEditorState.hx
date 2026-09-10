@@ -804,7 +804,8 @@ class CharacterEditorState extends MusicBeatState
 		character.color = FlxColor.WHITE;
 		character.alpha = 1;
 
-		if(Paths.fileExists('images/' + character.imageFile + '/Animation.json', TEXT))
+		if(character.imageFile.contains(',')) character.frames = Paths.getMultiAtlas(character.imageFile.split(','));
+		else if(Paths.fileExists('images/' + character.imageFile + '/Animation.json', TEXT))
 		{
 			character.atlas = new FlxAnimate();
 			character.atlas.showPivot = false;

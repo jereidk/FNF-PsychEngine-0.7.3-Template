@@ -60,12 +60,17 @@ class FunkinLua {
 	public var hscript:HScript = null;
 	#end
 
+	public var localVariables:Map<String, Dynamic> = new Map<String, Dynamic>();
 	public var callbacks:Map<String, Dynamic> = new Map<String, Dynamic>();
 	public static var customFunctions:Map<String, Dynamic> = new Map<String, Dynamic>();
+
 
 	public function new(scriptName:String) {
 		lua = LuaL.newstate();
 		LuaL.openlibs(lua);
+
+		// Module system: defines import() before the script loads, so top-level import() calls work
+		LuaImport.install(lua, scriptName);
 
 		//trace('Lua version: ' + Lua.version());
 		//trace("LuaJIT version: " + Lua.versionJIT());
@@ -272,6 +277,37 @@ class FunkinLua {
 					}
 		});
 
+		Lua_helper.add_callback(lua, "callHScript", function(luaFile:String, funcName:String, ?args:Array<Dynamic> = null) {
+			#if HSCRIPT_ALLOWED
+			if(args == null) args = [];
+
+			var foundScript:String = findScript(luaFile, '.hx');
+			if(foundScript != null)
+				for (script in game.hscriptArray)
+					if(script.origin == foundScript && script.exists(funcName))
+					{
+						final callValue = script.call(funcName, args);
+						if(!callValue.succeeded)
+						{
+							var e = callValue.exceptions[0];
+							if(e != null)
+							{
+								var msg:String = e.message;
+								var idx:Int = msg.indexOf('\n');
+								if(idx > 0) msg = msg.substr(0, idx);
+								luaTrace('callHScript ($foundScript:$funcName) - $msg', false, false, FlxColor.RED);
+							}
+							return null;
+						}
+						return callValue.returnValue;
+					}
+			luaTrace("callHScript: Script or function doesn't exist!", false, false, FlxColor.RED);
+			#else
+			luaTrace("callHScript: HScript is not supported on this platform!", false, false, FlxColor.RED);
+			#end
+			return null;
+		});
+
 		Lua_helper.add_callback(lua, "getGlobalFromScript", function(luaFile:String, global:String) { // returns the global from a script
 			var foundScript:String = findScript(luaFile);
 			if(foundScript != null)
@@ -285,10 +321,40 @@ class FunkinLua {
 							Lua.pushstring(lua, Lua.tostring(luaInstance.lua, -1));
 						else if(Lua.isboolean(luaInstance.lua,-1))
 							Lua.pushboolean(lua, Lua.toboolean(luaInstance.lua, -1));
+						else if(Lua.istable(luaInstance.lua,-1))
+						{
+							// Shallow copy of the table to the calling script's stack
+							Lua.newtable(lua);
+							Lua.pushnil(luaInstance.lua);
+							while(Lua.next(luaInstance.lua, -2) != 0)
+							{
+								// key = -2, value = -1 on the source script's stack
+								if(Lua.isnumber(luaInstance.lua,-2))
+									Lua.pushnumber(lua, Lua.tonumber(luaInstance.lua, -2));
+								else if(Lua.isstring(luaInstance.lua,-2))
+									Lua.pushstring(lua, Lua.tostring(luaInstance.lua, -2));
+								else // unsupported key type: skip this entry
+								{
+									Lua.pop(luaInstance.lua, 1); // pop value, key stays for Lua.next
+									continue;
+								}
+
+								if(Lua.isnumber(luaInstance.lua,-1))
+									Lua.pushnumber(lua, Lua.tonumber(luaInstance.lua, -1));
+								else if(Lua.isstring(luaInstance.lua,-1))
+									Lua.pushstring(lua, Lua.tostring(luaInstance.lua, -1));
+								else if(Lua.isboolean(luaInstance.lua,-1))
+									Lua.pushboolean(lua, Lua.toboolean(luaInstance.lua, -1));
+								else
+									Lua.pushnil(lua); // nested tables/objects are not copied (shallow copy)
+
+								Lua.rawset(lua, -3); // table[key] = value, pops key and value
+								Lua.pop(luaInstance.lua, 1); // pop value, key stays for Lua.next
+							}
+							Lua.pop(luaInstance.lua, 1); // pop the table from the source stack
+						}
 						else
 							Lua.pushnil(lua);
-
-						// TODO: table
 
 						Lua.pop(luaInstance.lua,1); // remove the global
 
@@ -375,6 +441,49 @@ class FunkinLua {
 		});
 		Lua_helper.add_callback(lua, "getVar", function(varName:String) {
 			return PlayState.instance.variables.get(varName);
+		});
+
+		Lua_helper.add_callback(lua, "loadModule", function(moduleName:String, ?ignoreAlreadyRunning:Bool = false):Bool {
+			var moduleFile:String = findScript(moduleName, '.lua');
+			if(moduleFile == null)
+			{
+				luaTrace("loadModule: Module '" + moduleName + "' doesn't exist! (paths are slash-separated, no '.lua' needed)", false, false, FlxColor.RED);
+				return false;
+			}
+
+			if(!ignoreAlreadyRunning)
+				for (luaInstance in game.luaArray)
+					if(luaInstance.scriptName == moduleFile)
+					{
+						luaTrace('loadModule: The module "' + moduleFile + '" is already running!', false, false, FlxColor.ORANGE);
+						return true;
+					}
+
+			new FunkinLua(moduleFile);
+			return true;
+		});
+
+		Lua_helper.add_callback(lua, "setLocalVar", function(varName:String, value:Dynamic) {
+			localVariables.set(varName, value);
+			return value;
+		});
+		Lua_helper.add_callback(lua, "getLocalVar", function(varName:String) {
+			return localVariables.get(varName);
+		});
+		Lua_helper.add_callback(lua, "removeLocalVar", function(varName:String) {
+			return localVariables.remove(varName);
+		});
+
+		// Module system backend for import(): resolves a mod path and returns its raw Lua source
+		Lua_helper.add_callback(lua, "__getModulePath", function(moduleName:String):Dynamic {
+			return findScript(moduleName, '.lua');
+		});
+		Lua_helper.add_callback(lua, "__getModuleContent", function(modulePath:String):Dynamic {
+			#if MODS_ALLOWED
+			if(FileSystem.exists(modulePath)) return File.getContent(modulePath);
+			#end
+			if(Assets.exists(modulePath)) return Assets.getText(modulePath);
+			return null;
 		});
 
 		Lua_helper.add_callback(lua, "addLuaScript", function(luaFile:String, ?ignoreAlreadyRunning:Bool = false) { //would be dope asf.
@@ -498,6 +607,18 @@ class FunkinLua {
 			if(spr != null && image != null && image.length > 0)
 			{
 				LuaUtils.loadFrames(spr, image, spriteType);
+			}
+		});
+		Lua_helper.add_callback(lua, "loadMultipleFrames", function(variable:String, images:Array<String>) {
+			var split:Array<String> = variable.split('.');
+			var spr:FlxSprite = LuaUtils.getObjectDirectly(split[0]);
+			if(split.length > 1) {
+				spr = LuaUtils.getVarInArray(LuaUtils.getPropertyLoop(split), split[split.length-1]);
+			}
+
+			if(spr != null && images != null && images.length > 0)
+			{
+				spr.frames = Paths.getMultiAtlas(images);
 			}
 		});
 
@@ -755,6 +876,7 @@ class FunkinLua {
 		Lua_helper.add_callback(lua, "getScore", function() {
 			return game.songScore;
 		});
+		Lua_helper.add_callback(lua, "updateScoreText", function() game.updateScore(false));
 		Lua_helper.add_callback(lua, "getMisses", function() {
 			return game.songMisses;
 		});
@@ -895,6 +1017,18 @@ class FunkinLua {
 			game.moveCamera(isDad);
 			return isDad;
 		});
+		Lua_helper.add_callback(lua, "setCameraScroll", function(x:Float, y:Float) FlxG.camera.scroll.set(x - FlxG.width/2, y - FlxG.height/2));
+		Lua_helper.add_callback(lua, "setCameraFollowPoint", function(x:Float, y:Float) game.camFollow.setPosition(x, y));
+		Lua_helper.add_callback(lua, "addCameraScroll", function(?x:Float = 0, ?y:Float = 0) FlxG.camera.scroll.add(x, y));
+		Lua_helper.add_callback(lua, "addCameraFollowPoint", function(?x:Float = 0, ?y:Float = 0) {
+			game.camFollow.x += x;
+			game.camFollow.y += y;
+		});
+		Lua_helper.add_callback(lua, "getCameraScrollX", () -> FlxG.camera.scroll.x + FlxG.width/2);
+		Lua_helper.add_callback(lua, "getCameraScrollY", () -> FlxG.camera.scroll.y + FlxG.height/2);
+		Lua_helper.add_callback(lua, "getCameraFollowX", () -> game.camFollow.x);
+		Lua_helper.add_callback(lua, "getCameraFollowY", () -> game.camFollow.y);
+
 		Lua_helper.add_callback(lua, "cameraShake", function(camera:String, intensity:Float, duration:Float) {
 			LuaUtils.cameraFromString(camera).shake(intensity, duration);
 		});
