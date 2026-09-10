@@ -2,11 +2,14 @@ name: Export haxelib cache
 
 # Publishes this repo's compiled haxelib tree (~/haxelib + .haxelib) as a
 # release, so build.yml's jobs can import it on cold caches instead of
-# installing lime/hxcpp/openfl/flixel from scratch. This is the
-# NightmareVision-Android-Support pattern, self-hosted: NV's own export is
-# pinned to FunkinCrew forks and is INCOMPATIBLE with this template's
-# AlafandyPorting/psych forks (hmm install would just replace all of it), so
-# it cannot be consumed here directly.
+# installing lime/hxcpp/openfl/flixel from scratch.
+#
+# ROLE: self-hosted MIRROR/fallback. The primary import source in build.yml is
+# NightmareVision-Android-Support's own `haxelib-cache-export` release, which
+# is consumable directly because hmm.json now pins the exact same FunkinCrew
+# fork commits NV does. This workflow exists so builds keep working if NV's
+# export disappears or pins drift apart: it compiles with THIS repo's pins
+# (identical to NV's today) and republishes the same tag locally.
 #
 # Run this ONCE after the pins in hmm.json change (or after a fresh compile),
 # then every cold build imports the tree for free.
