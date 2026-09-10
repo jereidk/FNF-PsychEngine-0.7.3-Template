@@ -47,7 +47,14 @@ on:
         type: boolean
         default: false
 
-# permissions: write-all
+# Explicit grants: the nested build.yml job requests actions:write (its cache
+# prune step calls the caches API with GH_TOKEN), and under a restricted
+# default token policy a calling job without permissions passes 'actions: none'
+# down to the callee -- which fails workflow validation. Releaser elevates
+# itself to write-all below for release publishing.
+permissions:
+  actions: write
+  contents: read
 
 env:
   PROJECT_NAME: PsychEngine
